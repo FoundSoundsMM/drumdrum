@@ -583,7 +583,7 @@ S.GLITCH_VOICES = {
   {
     name = "SNR", desc = "card riffle", def = "dd_gsnr",
     tone = {
-      T1 = { a = P("TONE", 800, 9000, "exp", 3200, "Hz"),
+      T1 = { a = P("TONE", 800, 9000, "exp", 2500, "Hz"),
              b = P("DECAY", 0.03, 1, "exp", 0.16, "s") },
       T2 = { a = P("RATE", 20, 800, "exp", 220, "", { fmtf = per_s }),
              b = P("CURVE", -1, 1, "lin", -0.3, "", { fmtf = function(v)
