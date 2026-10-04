@@ -1,7 +1,7 @@
 -- Prints each voice's default arguments the way lua would send them, one
 -- line per voice: "defname arg value ...". Used by check-engine.sh --render.
 -- An optional "key=value" list overrides physical values, e.g. t2a=0.9;
--- kit=2 or kit=3 prints the PING or FM voices instead of WARM.
+-- kit=2, 3 or 4 prints the WOOD, FM or GLITCH voices instead of WARM.
 local ROOT = (arg[0]:match("(.*)/tools/") or ".")
 function include(path) return dofile(ROOT .. "/" .. path:gsub("^drumdrum/", "") .. ".lua") end
 local S = include("drumdrum/lib/spec")

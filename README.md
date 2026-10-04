@@ -60,21 +60,22 @@ No two hits are quite the same, the way it is on a real analogue box:
 
 ## Kits
 
-The eight voices come in three voicings, and each track can be on any one:
+The eight voices come in four voicings, and each track can be on any one:
 
 | | |
 |---|---|
 | **WARM** | the voices above, voiced after the MFB Tanzbar |
 | **WOOD** | wooden, organic percussion: a cajon, a slit log, clappers, a wood block, a balafon, a shaker and a rainstick. Every mode dies sooner the higher it sits, as wood's do, and how hard a voice is struck is how long the hand, mallet or stick stays in contact. Most of them are hollow, and the air inside rings too. No two hits land in quite the same place, so each comes out a little differently |
 | **FM** | after the Yamaha YMF262 (OPL3), as ALM's Akemie's Taiko plays it: two- and four-operator FM on the chip's eight waveforms, its MULT ratios and operator feedback. The hat, snare and cymbal use the chip's rhythm mode (two operators' phase bits XORed into metal, flipped by its noise generator). Phases reset on every hit as the chip's do, nothing is band-limited, and it all goes out through the chip's 10-bit floating-point DAC |
+| **GLITCH** | soft glitch drums after Matmos and Björk's Vespertine, where the beat is microsound. Every voice starts as noise: clouds of tiny grains, each at its own pitch and loudness, noise breaths ringing resonators, clicks. Several voices STUTTER, retriggering the hit a few times like an edit |
 
 Pick them on the SNAP page (below). Each kit has its own T1-T4 settings per
 track, so a kit is how you left it when you come back to it. The rest of
 a track (sample, noise, colour, mix, LFOs, steps and locks) carries over.
 T1 is PITCH / DECAY and T4's E3 is LEVEL in every kit; a lock or LFO on another T
 control stays on the same knob, which turns something else in another
-kit. Each track's kit is the `kit` param in its PARAMS group; WOOD's and
-FM's T params have groups of their own.
+kit. Each track's kit is the `kit` param in its PARAMS group; WOOD's,
+FM's and GLITCH's T params have groups of their own.
 
 | WOOD | T2 | T3 | T4 |
 |---|---|---|---|
@@ -132,6 +133,41 @@ modulation depth and M.DEC how fast it closes; FDBK is operator 1 feeding
 back on itself, sine to saw to noise. PRC2 is the taiko: a drum that
 sweeps into its pitch with a stick click on top. TREM is the chip's 3.7 Hz
 tremolo.
+
+| GLITCH | T2 | T3 | T4 |
+|---|---|---|---|
+| BD1 | SOFT / BREATH | STUTTER / GAP | SWEEP / LEVEL |
+| BD2 | DUB / GAP | SOFT / GRIT | TONE / LEVEL |
+| CLP | DENSITY / GRAIN | CRUNCH / SPREAD | SQUEAK / LEVEL |
+| SNR | RATE / CURVE | SNAP / PAPER | JITTER / LEVEL |
+| PRC1 | RISE / SPLASH | SCATTER / SPREAD | WINDOW / LEVEL |
+| PRC2 | BRIGHT / BODY | STUTTER / GAP | STEP / LEVEL |
+| HAT | GRAINS / SPREAD | BITS / RATE | AIR / LEVEL |
+| CYM | SWELL / VOWEL | CRACKLE / SHIMMER | AIR / LEVEL |
+
+- **STUTTER / GAP** (BD1, PRC2) retrigger the hit STUTTER times, GAP apart,
+  each repeat quieter, the way a cut-up edit repeats a sliver of sound.
+- **BD1** a hush of a kick: a breath of noise (SOFT is how long it lasts)
+  rings a low resonance that falls SWEEP octaves into PITCH. BREATH is the
+  noise on its own, the air around the thump.
+- **BD2** a heartbeat: two soft thumps GAP apart, the second DUB as loud and
+  a little higher. GRIT is a crackle in it.
+- **CLP** a footstep in snow: a cloud of tiny grains (DENSITY a second, each
+  GRAIN long) at pitches SPREAD around TONE. CRUNCH makes most grains small
+  and a few big. The step presses, gives and settles. SQUEAK is packed snow.
+- **SNR** a riffle of cards: clicks at RATE a second, CURVE speeding them up
+  or slowing them down, JITTER making them uneven. SNAP is the paper's first
+  slap, PAPER the rustle underneath.
+- **PRC1** a drop of water: a resonance that RISES as it dies, the way a
+  bubble does. SCATTER adds smaller drops over WINDOW, SPREAD in pitch.
+  SPLASH is the hiss of it landing.
+- **PRC2** a music box tine plucked by noise. Each STUTTER repeat is STEP
+  semitones on from the last, so +12 climbs in octaves, a sparkle.
+- **HAT** the clicks a cut sound file makes: a tick, then GRAINS more
+  scattered over SPREAD. BITS and RATE crush them; AIR is hiss after.
+- **CYM** a whisper: breath through three vowel formants (VOWEL walks A E I
+  O U, PITCH moves them), swelling in over SWELL. SHIMMER turns it glassy,
+  CRACKLE is ice.
 
 ## Grid
 
@@ -395,11 +431,11 @@ applied while the clock source is internal.
   blinks.
 - **Tap a blank cell** loads the INIT patch: every setting at its default and
   nothing on the sequencer, the same way (on the beat while playing).
-- **Row 7, columns 1-3 are the kits:** WARM, WOOD, FM. Tap one and every
+- **Row 7, columns 1-4 are the kits:** WARM, WOOD, FM, GLITCH. Tap one and every
   track goes to it. Hold one and press track buttons to move only those
   tracks: the tracks already on it light up while you hold. A kit is
   bright when every track is on it and half lit when some are. The screen
-  shows each track's kit along the bottom (WA, WO, FM). A change is heard
+  shows each track's kit along the bottom (WA, WO, FM, GL). A change is heard
   from each track's next hit.
 - **SHIFT + STOP + hold a cell** deletes it: the cell drains while you hold
   and is removed when it is empty. Let go early and it stays. (SHIFT + STOP
@@ -606,7 +642,7 @@ seconds, and those are measured from the beat.
 
 ```
 drumdrum.lua            entry point: init, keys, encoders
-lib/Engine_DrumDrum.sc  voices (three kits), channel strips, duck, delay, spring, punch-ins, master COLOUR
+lib/Engine_DrumDrum.sc  voices (four kits), channel strips, duck, delay, spring, punch-ins, master COLOUR
 lib/spec.lua            grid layout, voices, every parameter and its range
 lib/state.lua           tracks, params, the hit that turns a step into sound
 lib/seq.lua             sequencers, conditions, pulses, swing

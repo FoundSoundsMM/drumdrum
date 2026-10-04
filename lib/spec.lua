@@ -262,8 +262,8 @@ S.VOICES = {
 
 -- --------------------------------------------------------------------- kits
 --
--- Three voicings of the same eight roles. Each track has its own KIT param,
--- so they mix and match; on the SNAP page grid row 7, columns 1-3, tap a kit
+-- Four voicings of the same eight roles. Each track has its own KIT param,
+-- so they mix and match; on the SNAP page grid row 7, columns 1-4, tap a kit
 -- to put every track on it, or hold one and press track buttons to move
 -- just those:
 --
@@ -273,6 +273,9 @@ S.VOICES = {
 --   FM    after the Yamaha YMF262 (OPL3), as ALM's Akemie's Taiko plays it:
 --         two- and four-operator FM on the chip's waveforms, ratios and
 --         rhythm mode, through its floating-point DAC
+--   GLITCH soft glitch drums after Matmos and Bjork's Vespertine, all from
+--         noise: a hush kick, a heartbeat, a snow step, a card riffle, a
+--         water drop, a music box, micro ticks, a whisper
 --
 -- Each kit has its own T1-T4 params, so a kit keeps how you left it while
 -- that track is on another. Everything else on a track (sample, noise, colour,
@@ -281,7 +284,7 @@ S.VOICES = {
 -- turns. T1 is PITCH / DECAY and T4b LEVEL in every kit, so those locks mean
 -- the same thing everywhere.
 
-S.KITS = { "WARM", "WOOD", "FM" }
+S.KITS = { "WARM", "WOOD", "FM", "GLITCH" }
 -- The kit a track is playing is its KIT param, read from there: every
 -- module include()s its own copy of this file, so a table kept here would
 -- not be the same one from module to module. WARM until params exist.
@@ -523,9 +526,132 @@ S.FM_VOICES = {
   },
 }
 
+-- GLITCH: soft glitch drums after Matmos and Bjork's Vespertine, every
+-- voice made from noise (see the engine's notes)
+local per_s = function(v) return string.format("%d/s", math.floor(v + 0.5)) end
+local VOWEL = function(v)
+  local names = { "A", "E", "I", "O", "U" }
+  local x = v * 4
+  local lo = math.floor(x)
+  if x - lo < 0.15 or lo >= 4 then return names[math.floor(x + 0.5) + 1] end
+  if x - lo > 0.85 then return names[lo + 2] end
+  return names[lo + 1] .. ">" .. names[lo + 2]
+end
+
+S.GLITCH_VOICES = {
+  {
+    name = "BD1", desc = "hush kick", def = "dd_gbd1",
+    tone = {
+      T1 = { a = P("PITCH", 30, 120, "exp", 55, "Hz"),
+             b = P("DECAY", 0.05, 2, "exp", 0.35, "s") },
+      T2 = { a = P("SOFT", 0, 1, "lin", 0.5, "", { fmtf = pct }),
+             b = P("BREATH", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T3 = { a = INT("STUTTER", 1, 8, 1),
+             b = P("GAP", 0.005, 0.15, "exp", 0.035, "s") },
+      T4 = { a = P("SWEEP", 0, 2, "lin", 0.6, "oct"),
+             b = P("LEVEL", 0, 1, "lin", 0.8, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "BD2", desc = "heartbeat", def = "dd_gbd2",
+    tone = {
+      T1 = { a = P("PITCH", 30, 150, "exp", 58, "Hz"),
+             b = P("DECAY", 0.05, 1.5, "exp", 0.3, "s") },
+      T2 = { a = P("DUB", 0, 1, "lin", 0.6, "", { fmtf = pct }),
+             b = P("GAP", 0.04, 0.5, "exp", 0.17, "s") },
+      T3 = { a = P("SOFT", 0, 1, "lin", 0.6, "", { fmtf = pct }),
+             b = P("GRIT", 0, 1, "lin", 0.15, "", { fmtf = pct }) },
+      T4 = { a = P("TONE", 150, 8000, "exp", 1400, "Hz"),
+             b = P("LEVEL", 0, 1, "lin", 0.8, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "CLP", desc = "snow step", def = "dd_gclp",
+    tone = {
+      T1 = { a = P("TONE", 400, 8000, "exp", 2600, "Hz"),
+             b = P("DECAY", 0.05, 1.5, "exp", 0.3, "s") },
+      T2 = { a = P("DENSITY", 20, 4000, "exp", 700, "", { fmtf = per_s }),
+             b = P("GRAIN", 0.0002, 0.01, "exp", 0.0012, "s") },
+      T3 = { a = P("CRUNCH", 0, 1, "lin", 0.5, "", { fmtf = pct }),
+             b = P("SPREAD", 0, 1, "lin", 0.5, "", { fmtf = pct }) },
+      T4 = { a = P("SQUEAK", 0, 1, "lin", 0.1, "", { fmtf = pct }),
+             b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "SNR", desc = "card riffle", def = "dd_gsnr",
+    tone = {
+      T1 = { a = P("TONE", 800, 9000, "exp", 3200, "Hz"),
+             b = P("DECAY", 0.03, 1, "exp", 0.16, "s") },
+      T2 = { a = P("RATE", 20, 800, "exp", 220, "", { fmtf = per_s }),
+             b = P("CURVE", -1, 1, "lin", -0.3, "", { fmtf = function(v)
+               if math.abs(v) < 0.05 then return "EVEN" end
+               return ((v > 0) and "FASTER " or "SLOWER ") .. math.floor(math.abs(v) * 100 + 0.5) end }) },
+      T3 = { a = P("SNAP", 0, 1, "lin", 0.35, "", { fmtf = pct }),
+             b = P("PAPER", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T4 = { a = P("JITTER", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "PRC1", desc = "water drop", def = "dd_gprc1",
+    tone = {
+      T1 = { a = P("PITCH", 150, 5000, "exp", 900, "Hz"),
+             b = P("DECAY", 0.01, 0.6, "exp", 0.07, "s") },
+      T2 = { a = P("RISE", 0, 2, "lin", 0.7, "oct"),
+             b = P("SPLASH", 0, 1, "lin", 0.15, "", { fmtf = pct }) },
+      T3 = { a = P("SCATTER", 0, 1, "lin", 0.25, "", { fmtf = pct }),
+             b = P("SPREAD", 0, 1, "lin", 0.5, "", { fmtf = pct }) },
+      T4 = { a = P("WINDOW", 0.02, 1.5, "exp", 0.3, "s"),
+             b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "PRC2", desc = "music box", def = "dd_gprc2",
+    tone = {
+      T1 = { a = P("PITCH", 100, 3000, "exp", 660, "Hz"),
+             b = P("DECAY", 0.05, 4, "exp", 0.8, "s") },
+      T2 = { a = P("BRIGHT", 0, 1, "lin", 0.45, "", { fmtf = pct }),
+             b = P("BODY", 0, 1, "lin", 0.25, "", { fmtf = pct }) },
+      T3 = { a = INT("STUTTER", 1, 8, 2),
+             b = P("GAP", 0.01, 0.3, "exp", 0.09, "s") },
+      T4 = { a = INT("STEP", -12, 12, 12, "", { fmtf = function(v)
+               return string.format("%+d st", math.floor(v + 0.5)) end }),
+             b = P("LEVEL", 0, 1, "lin", 0.65, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "HAT", desc = "micro ticks", def = "dd_ghat",
+    tone = {
+      T1 = { a = P("TONE", 1000, 16000, "exp", 6500, "Hz"),
+             b = P("DECAY", 0.005, 0.8, "exp", 0.05, "s") },
+      T2 = { a = P("GRAINS", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("SPREAD", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T3 = { a = P("BITS", 2, 16, "lin", 12, "", { fmtf = function(v)
+               return string.format("%.1f bit", v) end }),
+             b = P("RATE", 0, 1, "lin", 0.15, "", { fmtf = pct }) },
+      T4 = { a = P("AIR", 0, 1, "lin", 0.25, "", { fmtf = pct }),
+             b = P("LEVEL", 0, 1, "lin", 0.6, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "CYM", desc = "whisper", def = "dd_gcym",
+    tone = {
+      T1 = { a = P("PITCH", 300, 2500, "exp", 800, "Hz"),
+             b = P("DECAY", 0.1, 6, "exp", 1.4, "s") },
+      T2 = { a = P("SWELL", 0.001, 1.5, "exp", 0.15, "s"),
+             b = P("VOWEL", 0, 1, "lin", 0.25, "", { fmtf = VOWEL }) },
+      T3 = { a = P("CRACKLE", 0, 1, "lin", 0.2, "", { fmtf = pct }),
+             b = P("SHIMMER", 0, 1, "lin", 0.2, "", { fmtf = pct }) },
+      T4 = { a = P("AIR", 0, 1, "lin", 0.35, "", { fmtf = pct }),
+             b = P("LEVEL", 0, 1, "lin", 0.55, "", { fmtf = pct }) },
+    },
+  },
+}
+
 -- the same roles in every kit: the sample defaults and the duck's source
 -- names come from WARM
-S.KIT_VOICES = { S.VOICES, S.WOOD_VOICES, S.FM_VOICES }
+S.KIT_VOICES = { S.VOICES, S.WOOD_VOICES, S.FM_VOICES, S.GLITCH_VOICES }
 for k = 2, #S.KIT_VOICES do
   for t, v in ipairs(S.KIT_VOICES[k]) do
     v.smp, v.choke = S.VOICES[t].smp, S.VOICES[t].choke

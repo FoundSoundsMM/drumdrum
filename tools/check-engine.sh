@@ -43,8 +43,8 @@ var n = 0, bad = 0, dir = thisProcess.argv[0], render = thisProcess.argv[1] == "
 try { Engine_DrumDrum.buildDefs } { |err| bad = 1; "\n!! BUILD ERROR: %\n".postf(err.errorString) };
 SynthDescLib.global.synthDescs.keysDo { |k|
 	if(k.asString.beginsWith("dd_")) { n = n + 1 } };
-"\n== synthdefs built: % (want 38)  errors: %\n".postf(n, bad);
-if(n != 38) { bad = bad + 1 };
+"\n== synthdefs built: % (want 46)  errors: %\n".postf(n, bad);
+if(n != 46) { bad = bad + 1 };
 
 if(render and: { bad == 0 }) {
 	// one line per voice: "defname arg value arg value ..."
