@@ -1,19 +1,21 @@
 -- drumdrum / screen
 --
--- Six pages and four overlays. The pages are what the grid's MIX and
--- COLOUR buttons (and SHIFT + PLAY for SNAP, SHIFT + MIX for PERFORM,
--- SHIFT + SWING for CLIPS, whose E2 is the RAIN)
+-- Five pages and five overlays. The pages are what the grid's MIX and
+-- COLOUR buttons (and SHIFT + PLAY for SNAP, SHIFT + MIX for PERFORM)
 -- choose between; the overlays are momentary and sit on top of whichever
 -- page is open:
 --
 --   CONTROL  a held (or latched) track control: two parameters, E2 and E3
---   LFO      a held LFO button: its shape, RATE on E2, DEPTH on E3
---   SWING    the held SWING button: AMOUNT on E2, GRID on E3
+--   LFO      a held LFO button: its shape, RATE on E2, DEPTH on E3; with a
+--            sound control held too, E2 / E3 patch it
+--   SWING    the held SWING button: RAIN on E1, AMOUNT on E2, GRID on E3
 --   TAPE     SHIFT + COLOUR held: PITCH on E2, LENGTH on E3
 --   REC      on MAIN while a sample take is armed (lib/sampler): START on
---            E1, LEVEL on E2, SOURCE on E3, K2 cancel, K3 now / stop
+--            E1, LEVEL on E2, SOURCE on E3, CLEAR cancel, K3 now / stop
 --
--- K2+K3 together puts back whatever the open screen's E2 and E3 turn.
+-- SHIFT is norns K2. With it held, E2 and E3 move every track.
+-- The grid's CLEAR on its own puts back whatever the open screen's E2 and
+-- E3 turn.
 
 local S = include("drumdrum/lib/spec")
 
@@ -95,7 +97,8 @@ function U.main()
     math.floor(params:get("clock_tempo") + 0.5))
   if St.fill then right = "FILL  " .. right end
   if tr.mute then right = "MUTED  " .. right end
-  header("drumdrum " .. S.KITS[S.kit_of(t)]:lower(), right)
+  -- SHIFT (K2): E2/E3 here set every track (see main_set)
+  header(G.shift and "ALL TRACKS" or ("drumdrum " .. S.KITS[S.kit_of(t)]:lower()), right)
 
   screen.font_size(16)
   screen.level(tr.mute and 4 or 15)
@@ -127,24 +130,19 @@ function U.main()
       screen.fill()
     end
   end
-  -- the pair E2 and E3 turn, and which of the pairs E1 is on
+  -- the pair E2 and E3 turn
   local pair = S.MAIN_PAIRS[St.main_pair]
   local vals
   if St.main_pair == 1 then vals = { tostring(tr.len), S.SPEEDS[tr.speed] }
   else vals = { S.DIRS[tr.dir] or "FWD", tr.dilla .. "%" } end
   for k = 1, 2 do
     local y = 36 + ((k - 1) * 9)
-    screen.level(4)
+    screen.level(G.shift and 15 or 4)
     screen.move(64, y)
     screen.text(pair[k])
     screen.level(15)
     screen.move(128, y)
     screen.text_right(vals[k])
-  end
-  for k = 1, #S.MAIN_PAIRS do
-    screen.level((k == St.main_pair) and 15 or 3)
-    screen.rect(64 + ((k - 1) * 4), 30, 2, 2)
-    screen.fill()
   end
 
   -- the eight tracks, flashing as they fire
@@ -171,7 +169,7 @@ end
 
 function U.mix()
   local t = St.sel
-  header("MIX  " .. S.VOICES[t].name, string.format("P %+.2f  T %+.2f",
+  header(G.shift and "MIX  ALL TRACKS" or ("MIX  " .. S.VOICES[t].name), string.format("P %+.2f  T %+.2f",
     params:get(St.pid(t, "pan")), params:get(St.pid(t, "tilt"))))
   for k = 1, S.NTRACKS do
     local x0 = (k - 1) * 16
@@ -516,6 +514,11 @@ function U.ctrl(btn)
   elseif G.latched == btn and G.stack[#G.stack] ~= btn then
     right = "LATCHED"
   end
+  if G.shift and #held == 0 and S.SOUND_KIND[b.kind] then
+    right = "ALL TRACKS"
+  elseif btn == "S1" and G.stack[#G.stack] == "S1" and #held == 0 then
+    right = G.shift and "STEP = REC" or "K2+STEP REC"
+  end
   header(v.name .. "  " .. b.label, right)
   screen.level(2)
   screen.move(0, 10.5)
@@ -554,11 +557,7 @@ function U.ctrl(btn)
   if #held > 0 and S.SOUND_KIND[b.kind] then
     screen.level(3)
     screen.move(128, 61)
-    screen.text_right("K2 clear")
-  elseif btn == "S1" and G.stack[#G.stack] == "S1" then
-    screen.level(3)
-    screen.move(128, 61)
-    screen.text_right("+step REC")
+    screen.text_right("CLR unlock")
   end
 end
 
@@ -597,28 +596,46 @@ function U.lfo(i)
   screen.fill()
 
   local tn = L.target_name(t, i)
+  local pt = G.patch and G.patch.lfo == i and G.patch or nil
   screen.level(tn and 15 or 4)
   screen.move(64, 45)
-  screen.text_center(tn and ("> " .. tn) or "hold + tap a control")
+  screen.text_center(tn and ("> " .. tn) or "hold a control too")
 
-  screen.level(6)
-  screen.move(0, 55)
-  screen.text("RATE")
-  screen.move(66, 55)
-  screen.text("DEPTH")
-  screen.level(15)
-  local rate = L.rate(t, i)
-  screen.move(62, 55)
-  screen.text_right(rate < 1 and string.format("%.2f Hz", rate) or string.format("%.1f Hz", rate))
-  screen.move(128, 55)
-  screen.text_right(string.format("%+.2f", L.depth(t, i)))
+  -- patching: E2 and E3 are the control's two sides, the patched one
+  -- showing the depth turning on moves
+  local labels, vals
+  if pt then
+    local pair = S.pair(t, pt.btn)
+    local on = L.side_on(t, i, pt.btn)
+    labels, vals = {}, {}
+    for k, side in ipairs({ "a", "b" }) do
+      labels[k] = pair[side].name
+      if pair[side].nomod then vals[k] = "--"
+      elseif on == side then vals[k] = string.format("%+.2f", L.depth(t, i))
+      else vals[k] = "patch" end
+    end
+  else
+    local rate = L.rate(t, i)
+    labels = { "RATE", "DEPTH" }
+    vals = { rate < 1 and string.format("%.2f Hz", rate) or string.format("%.1f Hz", rate),
+             string.format("%+.2f", L.depth(t, i)) }
+  end
+  for k = 1, 2 do
+    local x = (k == 1) and 0 or 66
+    screen.level(6)
+    screen.move(x, 55)
+    screen.text(fit(labels[k], 58 - screen.text_extents(vals[k])))
+    screen.level(15)
+    screen.move(x + 62, 55)
+    screen.text_right(vals[k])
+  end
   screen.level(2)
   screen.move(0, 63)
   screen.text("E2")
   screen.move(66, 63)
   screen.text("E3")
   screen.move(128, 63)
-  screen.text_right("K2/3 shape")
+  screen.text_right("K3 shape")
 end
 
 -- ------------------------------------------------------------ SWING overlay
@@ -814,7 +831,7 @@ function U.tape()
   screen.move(66, 62)
   screen.text("E3")
   screen.move(128, 62)
-  screen.text_right("K2+3 reset")
+  screen.text_right("CLR reset")
 end
 
 -- --------------------------------------------------------------- REC overlay
@@ -886,7 +903,7 @@ function U.rec()
   end
   screen.level(3)
   screen.move(0, 63)
-  screen.text("K2 cancel")
+  screen.text("CLR cancel")
   screen.move(128, 63)
   screen.text_right((R.eng == 3) and "K3 stop" or "K3 now")
 end

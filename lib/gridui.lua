@@ -7,26 +7,33 @@
 --   COLOUR  the screen is the master COLOUR; the grid is the CLIP
 --           LAUNCHER: the seven rows above each track's button are its
 --           clip slots (see lib/clips). Tap launches on the next bar, hold
---           one + tap another copies, SHIFT + STOP + slot empties. The
---           columns either side show the RAIN. Row 7: columns 1 and 2 step
---           back and forward through the colour banks (BUSS DUCK TEXTURE
---           SPACE), column 16 is BYPASS
+--           one + tap another copies. The columns either side show the
+--           RAIN. Row 7: columns 1 and 2 step back and forward through the
+--           colour banks (BUSS DUCK TEXTURE SPACE), column 16 is BYPASS
 --   SNAP    rows 1-4 are 64 snapshots (SHIFT + PLAY opens it): tap loads on
 --           the beat (a blank cell loads the init patch), SHIFT + hold
---           saves, SHIFT + STOP + hold deletes. Row 7, columns 1-4 are the
---           kits WARM WOOD FM GLITCH: tap one for every track, or hold one and
---           press track buttons to move only those
+--           saves. Row 7, columns 1-4 are the kits WARM WOOD FM GLITCH: tap
+--           one for every track, or hold one and press track buttons to
+--           move only those
 --   PERFORM rows 1-4 are 64 punch-in effects (SHIFT + MIX opens it), eight
 --           strips of eight, held or SHIFT-latched; see lib/perform
 --
--- Row 8 never changes: PLAY STOP SWING . [tracks 1-8] . SHIFT MIX COLOUR.
--- SHIFT + track plays the track's sound. SHIFT + STOP is FILL for as long
--- as STOP is held. SHIFT + COLOUR, held, is the hidden TAPE. On MIX the
--- track buttons mute.
+-- Row 8 never changes: PLAY STOP SWING . [tracks 1-8] . CLEAR MIX COLOUR.
 --
--- SAMPLER: hold S1 and the steps are a record length (lib/sampler). Tap
--- one to arm the selected track for that many steps, the same one again to
--- disarm. A take recording fills the steps as it goes.
+-- SHIFT is norns K2 (G.shift is set from drumdrum.lua). SHIFT + track plays
+-- the track's sound, SHIFT + STOP is FILL while STOP is held, SHIFT +
+-- COLOUR held is the hidden TAPE. On MIX and PERFORM the track buttons mute.
+--
+-- CLEAR takes things away. CLEAR + step: the step back to a plain hit.
+-- CLEAR + track, held: the track's pattern gone. CLEAR + control: that
+-- control reset (or its locks off the held steps). CLEAR + snapshot, held:
+-- deleted. CLEAR + clip slot: emptied. CLEAR + pad: its latch off. CLEAR on
+-- its own, let go without having done any of those: the open screen reset
+-- (G.on_clear, from drumdrum.lua).
+--
+-- SAMPLER: hold S1 and SHIFT and the steps are a record length
+-- (lib/sampler). Tap one to arm the selected track for that many steps, the
+-- same one again to disarm. A take recording fills the steps as it goes.
 --
 -- Steps: a press on an empty step places one at once. A press on a placed
 -- step holds it; let go quickly without having turned anything and it is
@@ -36,6 +43,7 @@
 --
 -- Controls are momentary: the screen is open while the button is held.
 -- SHIFT + control latches it open; the same again, or another latch, closes.
+-- Hold an LFO and a sound control together and E2 / E3 patch it.
 
 local S = include("drumdrum/lib/spec")
 
@@ -45,9 +53,18 @@ local g, St, Q, L, N, F, C, R
 G.held = {}        -- held steps, oldest first: { i, t0, new, edited }
 G.stack = {}       -- control buttons physically held, oldest first
 G.latched = nil
-G.shift = false
+G.lock = nil       -- a sound control opened over held steps, kept open on
+                   -- those steps after letting go: { btn, steps = { i... } }
+G.swallow = {}     -- steps whose press closed the lock: their release does nothing
+G.shift = false    -- norns K2 held
+G.shift_used = false  -- something was done with SHIFT: its release is not a tap
+G.clear = false    -- CLEAR held
+G.clear_used = false  -- CLEAR + something happened: its release resets nothing
+G.wipe = nil       -- CLEAR + track held: { t, t0, done }, the pattern goes at WIPE_HOLD
+G.patch = nil      -- an LFO and a sound control held together: { lfo, btn }
+G.on_clear = nil       -- CLEAR on its own (drumdrum.lua: reset the open screen)
+G.on_clear_ctrl = nil  -- CLEAR + control (drumdrum.lua: reset that control)
 G.swing = false
-G.stop = false     -- STOP physically held: SHIFT + STOP + cell deletes on SNAP
 G.fill = false     -- FILL is on because SHIFT + STOP went down: off with STOP
 G.tape = false     -- the hidden TAPE: SHIFT + COLOUR, on while COLOUR is held
 G.bypass_flash = 0
@@ -55,6 +72,7 @@ G.kit = nil        -- SNAP: a kit button held, { k, used }: let go unused, it is
 
 -- pan: three buttons a track, nudge left, centre, nudge right
 local PAN_STEP = 0.1
+local WIPE_HOLD = 0.5
 
 function G.init(state, seq, lfo, snap, perform, clips, sampler)
   St, Q, L, N, F, C, R = state, seq, lfo, snap, perform, clips, sampler
@@ -70,15 +88,26 @@ function G.overlay()
   local top = G.stack[#G.stack]
   if top then return "ctrl", top end
   if G.swing then return "swing" end
+  if G.lock then return "ctrl", G.lock.btn end
   if G.latched then return "ctrl", G.latched end
   if R and R.active() and St.page == "main" then return "rec" end
   return nil
 end
 
+-- the steps a control edits: the ones under a finger, plus a lock's
 function G.held_steps()
-  local out = {}
-  for _, h in ipairs(G.held) do out[#out + 1] = h.i end
+  local out, seen = {}, {}
+  for _, h in ipairs(G.held) do out[#out + 1] = h.i; seen[h.i] = true end
+  if G.lock then
+    for _, i in ipairs(G.lock.steps) do
+      if not seen[i] then out[#out + 1] = i end
+    end
+  end
   return out
+end
+
+function G.drop_held()
+  G.held, G.lock, G.swallow = {}, nil, {}
 end
 
 -- the LFO a finger is on, if any: patching only happens while held
@@ -96,6 +125,8 @@ end
 
 function G.release_all()
   G.held, G.stack, G.kit = {}, {}, nil
+  G.wipe, G.patch = nil, nil
+  G.lock, G.swallow = nil, {}
   C.hold = nil
   F.release_held()
 end
@@ -121,9 +152,7 @@ local function row8(x, z)
     end
   elseif x == R.stop then
     -- SHIFT + STOP is FILL while STOP stays down, however SHIFT moves
-    -- meanwhile. On SNAP it is also the delete chord: a delete starting
-    -- ends the fill (see snap_key).
-    G.stop = (z == 1)
+    -- meanwhile
     if z == 1 then
       if G.shift then
         G.fill = true
@@ -138,23 +167,35 @@ local function row8(x, z)
   elseif x == R.swing then
     G.swing = (z == 1)
   elseif x > R.track0 and x <= R.track0 + S.NTRACKS then
-    if z == 1 then
-      local t = x - R.track0
-      if G.kit then
+    local t = x - R.track0
+    if z == 0 then
+      if G.wipe and G.wipe.t == t then G.wipe = nil end
+    else
+      if G.clear then
+        -- held long enough, the pattern goes (see G.redraw)
+        G.wipe = { t = t, t0 = util.time() }
+        G.clear_used = true
+      elseif G.kit then
         -- holding a kit on SNAP: this track to it, the rest left alone
         St.set_kit(t, G.kit.k)
         G.kit.used = true
       elseif G.shift then
         St.audition(t)
-      elseif St.page == "mix" then
+      elseif St.page == "mix" or St.page == "perform" then
         St.toggle_mute(t)
       elseif t ~= St.sel then
-        G.held = {}
+        G.drop_held()
         St.select(t)
       end
     end
-  elseif x == R.shift then
-    G.shift = (z == 1)
+  elseif x == R.clear then
+    G.clear = (z == 1)
+    if z == 1 then
+      G.clear_used = false
+    else
+      G.wipe = nil
+      if not G.clear_used and G.on_clear then G.on_clear() end
+    end
   elseif x == R.colour and (G.tape or (G.shift and z == 1)) then
     -- the hidden TAPE: on with SHIFT, off with COLOUR, whatever SHIFT does
     G.tape = (z == 1)
@@ -169,9 +210,10 @@ local function row8(x, z)
   end
 end
 
--- S1 held on its own: the steps are the sampler's lengths
+-- S1 and SHIFT held, no steps: the steps are the sampler's lengths.
+-- SHIFT + step is always a length: the track's, or with S1 the take's.
 local function rec_pick()
-  return R and G.stack[#G.stack] == "S1" and #G.held == 0
+  return R and G.shift and G.stack[#G.stack] == "S1" and #G.held == 0
 end
 
 local function step_key(x, y, z)
@@ -182,8 +224,21 @@ local function step_key(x, y, z)
     return
   end
   if z == 1 then
+    if G.clear then
+      -- the step back to a plain hit: no locks, conditions or pulses
+      G.clear_used = true
+      if tr.steps[i] then tr.steps[i] = S.new_step() end
+      G.swallow[i] = true
+      return
+    end
     if G.shift then
       tr.len = i
+      return
+    end
+    -- a lock open and no step under a finger: this press only closes it
+    if G.lock and #G.held == 0 then
+      G.lock = nil
+      G.swallow[i] = true
       return
     end
     local st = tr.steps[i]
@@ -193,7 +248,16 @@ local function step_key(x, y, z)
       tr.steps[i] = S.new_step(tr.tpl)
       G.held[#G.held + 1] = { i = i, t0 = util.time(), new = true, edited = false }
     end
+    -- another step joining the ones a lock is open on
+    if G.lock then
+      G.lock.steps[#G.lock.steps + 1] = i
+      G.held[#G.held].edited = true
+    end
   else
+    if G.swallow[i] then
+      G.swallow[i] = nil
+      return
+    end
     local h = remove(G.held, function(e) return e.i == i end)
     if h and not h.new and not h.edited and (util.time() - h.t0) < 0.4 then
       tr.steps[i] = nil
@@ -206,18 +270,49 @@ local function ctrl_key(x, y, z)
   if not id then return end
   local b = S.BTN[id]
   if z == 1 then
+    if G.clear then
+      G.clear_used = true
+      if G.on_clear_ctrl then G.on_clear_ctrl(id) end
+      return
+    end
     local li = G.held_lfo()
     if li and S.SOUND_KIND[b.kind] then
-      L.patch(St.sel, li, id)
+      -- E2 / E3 patch it while both are held
+      G.patch = { lfo = li, btn = id }
       return
+    end
+    if b.kind == "lfo" then
+      -- the other way round: a sound control already down
+      for k = #G.stack, 1, -1 do
+        if S.SOUND_KIND[S.BTN[G.stack[k]].kind] then
+          G.patch = { lfo = b.lfo, btn = G.stack[k] }
+          break
+        end
+      end
     end
     if G.shift then
       G.latched = (G.latched ~= id) and id or nil
       return
     end
+    if S.SOUND_KIND[b.kind] then
+      if G.lock and G.lock.btn == id and #G.held == 0 then
+        -- the open lock's own button again: close it
+        G.lock = nil
+        return
+      end
+      if #G.held > 0 or G.lock then
+        -- over held steps: stays open on them once the fingers come off
+        G.lock = { btn = id, steps = G.held_steps() }
+        G.mark_edited()
+        return
+      end
+    end
     G.stack[#G.stack + 1] = id
   else
     remove(G.stack, function(e) return e == id end)
+    if G.patch and (G.patch.btn == id or (b.kind == "lfo" and G.patch.lfo == b.lfo)) then
+      G.patch = nil
+    end
   end
 end
 
@@ -226,7 +321,12 @@ local function mix_key(x, y, z)
   local R = S.ROW8
   if x > R.track0 and x <= R.track0 + S.NTRACKS then
     local t = x - R.track0
-    params:set(St.pid(t, "level"), (8 - y) / 7)
+    if G.clear then
+      G.clear_used = true
+      St.reset(St.pid(t, "level"))
+    else
+      params:set(St.pid(t, "level"), (8 - y) / 7)
+    end
     St.select(t)
     return
   end
@@ -236,7 +336,10 @@ local function mix_key(x, y, z)
   elseif x >= 14 then t, slot = y + 4, x - 13 end
   if not t then return end
   local id = St.pid(t, "pan")
-  if slot == 2 then
+  if G.clear then
+    G.clear_used = true
+    St.reset(id)
+  elseif slot == 2 then
     params:set(id, 0)
   else
     local d = (slot == 1) and -PAN_STEP or PAN_STEP
@@ -261,10 +364,8 @@ local function snap_key(x, y, z)
   if y > S.SEQ_ROWS then return end
   local i = ((y - 1) * 16) + x
   if z == 1 then
-    if G.shift and G.stop then
-      -- a delete, not a fill: the fill this chord started stops here
-      G.fill = false
-      St.fill = false
+    if G.clear then
+      G.clear_used = true
       N.hold_start(i, "delete")
     elseif G.shift then N.hold_start(i)
     else N.recall(i) end
@@ -278,10 +379,8 @@ local function launch_key(x, y, z)
   if not t then return end
   if z == 0 then
     C.release(t, c)
-  elseif G.stop then
-    -- an empty, not a fill: the fill this chord started stops here
-    G.fill = false
-    St.fill = false
+  elseif G.clear then
+    G.clear_used = true
     C.press(t, c, true)
   else
     C.press(t, c)
@@ -310,11 +409,15 @@ end
 local function perform_key(x, y, z)
   local f, i = F.strip_at(x, y)
   if not f then return end
-  if z == 1 then F.press(f, i, G.shift)
+  if z == 1 and G.clear then
+    G.clear_used = true
+    F.unlatch(f)
+  elseif z == 1 then F.press(f, i, G.shift)
   else F.release(f, i) end
 end
 
 function G.key(x, y, z)
+  if z == 1 and G.shift then G.shift_used = true end
   if y == 8 then
     row8(x, z)
   elseif St.page == "perform" then
@@ -368,9 +471,16 @@ local function draw_main()
   local tr = St.track()
   local heldset = {}
   -- SHIFT on its own flashes the last step, where SHIFT + step would move it
-  local show_len = G.shift and not G.stop and #G.held == 0 and #G.stack == 0
+  local show_len = G.shift and #G.held == 0 and #G.stack == 0
   local flash = (math.floor(util.time() * 6) % 2) == 0
   for _, h in ipairs(G.held) do heldset[h.i] = true end
+  local lockset = {}
+  if G.lock then for _, i in ipairs(G.lock.steps) do lockset[i] = true end end
+  -- CLEAR + this track held: the steps fade out as the wipe comes
+  local fade = 1
+  if G.wipe and G.wipe.t == St.sel then
+    fade = 1 - util.clamp((util.time() - G.wipe.t0) / WIPE_HOLD, 0, 1)
+  end
 
   for i = 1, S.NSTEPS do
     local x, y = ((i - 1) % 16) + 1, math.floor((i - 1) / 16) + 1
@@ -382,9 +492,10 @@ local function draw_main()
       -- brighter, so the grid has somewhere to count from
       if (i - 1) % 16 == 0 then lv = 3
       elseif (i - 1) % 4 == 0 then lv = 2 end
-      if on then lv = has_extras(st) and 11 or 7 end
+      if on then lv = math.floor(((has_extras(st) and 11 or 7) * fade) + 0.5) end
       if St.playing and tr.ph == i then lv = on and 15 or 4 end
     end
+    if lockset[i] then lv = flash and 15 or 4 end
     if heldset[i] then lv = 15 end
     if show_len and i == tr.len then lv = flash and 15 or 5 end
     if lv > 0 then g:led(x, y, lv) end
@@ -399,8 +510,8 @@ draw_ctrls = function()
   local li = G.held_lfo()
   -- which buttons have a lock on any held step
   local locked = {}
-  for _, h in ipairs(G.held) do
-    local st = tr.steps[h.i]
+  for _, i in ipairs(G.held_steps()) do
+    local st = tr.steps[i]
     if st and st.locks then
       for k in pairs(st.locks) do locked[k:sub(1, -2)] = true end
     end
@@ -408,6 +519,12 @@ draw_ctrls = function()
 
   for id, b in pairs(S.BTN) do
     local lv = 3
+    -- TC and P a touch brighter while new steps would not be plain
+    if S.STEP_KIND[b.kind] then
+      local pair = S.pair(St.sel, id)
+      if (tr.tpl[pair.a.key] or pair.a.def) ~= pair.a.def
+        or (tr.tpl[pair.b.key] or pair.b.def) ~= pair.b.def then lv = 6 end
+    end
     if b.kind == "lfo" then
       local o = L.st[St.sel][b.lfo]
       if o.target then
@@ -418,6 +535,8 @@ draw_ctrls = function()
     if li and L.side_on(St.sel, li, id) then lv = 13 end
     if G.latched == id then lv = 11 end
     if open == id and G.stack[#G.stack] == id then lv = 15 end
+    if G.lock and G.lock.btn == id and not G.stack[1] then lv = 15 end
+    if G.patch and G.patch.btn == id then lv = 15 end
     -- S1 pulses while a take is armed or recording on this track
     if id == "S1" and R and R.t == St.sel and lv < 15 then
       lv = 6 + math.floor((math.sin(util.time() * 6) + 1) * 4 + 0.5)
@@ -564,19 +683,34 @@ local function draw_row8()
     local tr = St.tracks[t]
     local lv
     -- holding a kit on SNAP: the tracks on it bright, the rest dim
+    local mutes = (St.page == "mix" or St.page == "perform")
     if G.kit then lv = (S.kit_of(t) == G.kit.k) and 15 or 2
-    -- on MIX these buttons are the mutes, so a mute shows even when selected
-    elseif (tr.mute or St.pmute[t]) and (St.page == "mix" or t ~= St.sel) then lv = 1
+    -- CLEAR + track held: blinking until the pattern goes
+    elseif G.wipe and G.wipe.t == t then lv = blink and 15 or 0
+    -- on MIX and PERFORM these buttons are the mutes, so a mute shows even
+    -- when selected
+    elseif (tr.mute or St.pmute[t]) and (mutes or t ~= St.sel) then lv = 1
     elseif t == St.sel then lv = 15
     else lv = 4 + math.floor(tr.flash * 7 + 0.5) end
     g:led(R.track0 + t, 8, lv)
   end
-  g:led(R.shift, 8, G.shift and 15 or 4)
+  g:led(R.clear, 8, G.clear and 15 or 4)
   g:led(R.mix, 8, (St.page == "mix") and 15 or ((St.page == "perform") and 10 or 4))
   g:led(R.colour, 8, (G.tape or St.page == "colour") and 15 or 4)
 end
 
+-- CLEAR + track held long enough: the playing clip's steps go
+local function wipe_tick()
+  local w = G.wipe
+  if w and not w.done and (util.time() - w.t0) >= WIPE_HOLD then
+    w.done = true
+    C.clear_slot(w.t, St.tracks[w.t].clip)
+    if w.t == St.sel then G.drop_held() end
+  end
+end
+
 function G.redraw()
+  wipe_tick()
   if not g then return end
   g:all(0)
   if St.page == "mix" then draw_mix()

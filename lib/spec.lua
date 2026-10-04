@@ -22,7 +22,9 @@ S.NSTEPS  = 64
 --  rows 1-4   the selected track's sequencer, 16 steps a row
 --  row  5     divider, unlit
 --  rows 6-7   track controls
---  row  8     PLAY STOP SWING . [1 2 3 4 5 6 7 8] . SHIFT MIX COLOUR
+--  row  8     PLAY STOP SWING . [1 2 3 4 5 6 7 8] . CLEAR MIX COLOUR
+--
+-- SHIFT is norns K2, not a grid button.
 --
 --         1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16
 --   6    T1  T2  .   S1  S2  .   N1  .  TC1 TC2  .   P1  .   L1  .   C1
@@ -70,7 +72,7 @@ S.SOUND_KIND = { tone = true, smp = true, noise = true, col = true }
 -- the kinds whose parameters belong to a step rather than to the track
 S.STEP_KIND = { trig = true, pulse = true }
 
-S.ROW8 = { play = 1, stop = 2, swing = 3, track0 = 4, shift = 14, mix = 15, colour = 16 }
+S.ROW8 = { play = 1, stop = 2, swing = 3, track0 = 4, clear = 14, mix = 15, colour = 16 }
 
 -- ------------------------------------------------------------------ helpers
 

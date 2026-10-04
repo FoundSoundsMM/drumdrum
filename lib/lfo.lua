@@ -2,10 +2,9 @@
 --
 -- Two LFOs a track, each patched to one parameter of its own track.
 --
--- Patching happens on the grid: hold an LFO button and tap a TONE, SAMPLE,
--- NOISE or COLOUR button. The first tap patches that button's E2 parameter,
--- the second its E3 parameter, the third unpatches. Tapping a different
--- button moves the patch there.
+-- Patching happens on the grid: hold an LFO button and a TONE, SAMPLE,
+-- NOISE or COLOUR button together, then turn E2 or E3 to patch that side.
+-- Turning on moves the depth. CLEAR + the LFO unpatches it.
 --
 -- Rate, depth and shape are params (so they save and MIDI-map); the patch
 -- point is saved in the pattern data. Modulation is added to the target's
@@ -95,18 +94,17 @@ function L.side_on(t, i, btn)
   return nil
 end
 
-function L.patch(t, i, btn)
-  local o = L.st[t][i]
+-- point LFO i of track t at one side of a button; false if that side
+-- cannot be modulated (S1's sample select)
+function L.set_target(t, i, btn, side)
   local pair = S.pair(t, btn)
-  if not pair then return end
-  local ok_a = not pair.a.nomod
-  local ok_b = not pair.b.nomod
-  local cur = (o.target and o.target.btn == btn) and o.target.side or nil
-  local nxt
-  if cur == nil then nxt = ok_a and "a" or (ok_b and "b" or nil)
-  elseif cur == "a" then nxt = ok_b and "b" or nil
-  else nxt = nil end
-  o.target = nxt and { btn = btn, side = nxt } or nil
+  if not pair or pair[side].nomod then return false end
+  L.st[t][i].target = { btn = btn, side = side }
+  return true
+end
+
+function L.unpatch(t, i)
+  L.st[t][i].target = nil
 end
 
 function L.target_name(t, i)

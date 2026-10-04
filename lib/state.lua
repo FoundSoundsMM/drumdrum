@@ -31,7 +31,7 @@ St.tracks = {}
 St.lfo = nil           -- set by the main script, read here for modulation
 St.clips = nil         -- likewise lib/clips, for the data file
 St.on_hit = nil        -- hook for the screen: a voice just fired
-St.DEFAULTS = {}       -- param id -> its default, for K2+K3
+St.DEFAULTS = {}       -- param id -> its default, for CLEAR
 St.pmute = {}          -- per track: taken out by a PERFORM DROP pad
 St.old_engine = false  -- the running engine predates this script: restart norns
 
@@ -113,7 +113,7 @@ function St.delta(id, d, fine)
   params:set_raw(id, util.clamp(r, 0, 1))
 end
 
--- K2+K3: a param back to where the script starts it
+-- CLEAR: a param back to where the script starts it
 function St.reset(id)
   local v = St.DEFAULTS[id]
   if v ~= nil and params:get(id) ~= v then params:set(id, v) end

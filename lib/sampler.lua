@@ -1,9 +1,9 @@
 -- drumdrum / sampler
 --
--- Recording a track's sample. Hold S1 and the 64 steps are a length: tap
--- one and the selected track is ARMED to record that many of its own steps
--- (at its own speed, never more than 20 seconds, so at slow tempos the
--- steps past 20 s stay dark). Tap the same step again to disarm.
+-- Recording a track's sample. Hold S1 and SHIFT (K2) and the 64 steps are a
+-- length: tap one and the selected track is ARMED to record that many of
+-- its own steps (at its own speed, never more than 20 seconds, so at slow
+-- tempos the steps past 20 s stay dark). Tap the same step again to disarm.
 --
 -- While armed the MAIN screen is the REC panel:
 --
@@ -14,7 +14,7 @@
 --   E2  LEVEL   the THRESH threshold, against the source's meter
 --   E3  SOURCE  the inputs (L+R, L, R), the MIX as you hear it, or one
 --               track's own voices, locks and LFOs and all
---   K2  cancel     K3  start now, or end a take early and keep it
+--   CLEAR cancel   K3  start now, or end a take early and keep it
 --
 -- A take is normalised, rounded off at both ends, written to
 -- dust/audio/drumdrum/rec/ and loaded onto the track like any other file,

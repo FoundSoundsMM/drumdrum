@@ -423,6 +423,19 @@ release(1, 6)
 release(3, 1)
 local st = St.tracks[1].steps[3]
 assert(st and st.locks and st.locks.T1a, "lock not written")
+-- the lock stays open on the step with every finger off
+assert(G.lock and G.lock.btn == "T1", "lock did not stay open")
+local before = st.locks.T1a
+enc(2, 3)
+assert(st.locks.T1a > before, "lock not editable after letting go")
+-- the next step press only closes it
+tap(3, 1)
+assert(G.lock == nil and St.tracks[1].steps[3], "closing the lock touched the step")
+-- tapping the lock's own button closes it too
+press(3, 1) press(2, 6) release(2, 6) release(3, 1)
+assert(G.lock and G.lock.btn == "T2", "lock not opened on T2")
+tap(2, 6)
+assert(G.lock == nil, "lock button did not close it")
 -- a quick tap on a placed step with no edit removes it
 tap(3, 1)
 assert(St.tracks[1].steps[3] == nil, "quick tap did not remove the step")
@@ -439,13 +452,13 @@ assert(st.cond == 2 and st.pulses == 4 and st.pmode == 2, "step props not edited
 
 -- shift + step sets length, shift + track previews, shift + control latches
 local trigs0 = calls.trig or 0
-press(14, 8) frame() tap(8, 2) tap(6, 8) tap(4, 6) release(14, 8)
+key(2, 1) frame() tap(8, 2) tap(6, 8) tap(4, 6) key(2, 0)
 assert(St.tracks[1].len == 24, "length not set")
 assert(not St.tracks[2].mute and St.sel == 1, "shift + track should only preview")
 assert((calls.trig or 0) > trigs0, "shift + track did not preview")
 assert(G.latched == "S1", "latch not set")
 frame()
-press(14, 8) tap(4, 6) release(14, 8)
+key(2, 1) tap(4, 6) key(2, 0)
 assert(G.latched == nil, "latch not cleared")
 
 -- the clip launcher (the COLOUR page's grid), stopped: launches are immediate
@@ -470,8 +483,8 @@ press(5, 3) tap(6, 2) release(5, 3)
 assert(tr1.clip == 1 and C.has(2, 2) and St.tracks[2].clip == 1, "copy went wrong")
 St.tracks[2].clips[2].steps[1].vel = 5
 assert(tr1.clips[3].steps[1].vel ~= 5, "copy shares tables")
--- shift + stop + slot empties it and is not a fill
-press(14, 8) press(2, 8) tap(6, 2) release(2, 8) release(14, 8)
+-- CLEAR + slot empties it; STOP + slot is just a launch now
+press(14, 8) tap(6, 2) release(14, 8)
 assert(not C.has(2, 2) and not St.fill, "slot not emptied")
 -- the pager and BYPASS on row 7 are not slots
 local cs0 = St.col_sel
@@ -522,16 +535,35 @@ assert(#C.drops > 0, "rain drew nothing")
 frame() clips()
 assert(St.page == "main")
 
--- LFO patching
+-- LFO patching: hold the LFO and a control, the first turn patches a side,
+-- turning on is the depth
 press(14, 6)
-tap(1, 6)
-assert(L.st[1][1].target and L.st[1][1].target.btn == "T1" and L.st[1][1].target.side == "a")
-tap(1, 6)
-assert(L.st[1][1].target.side == "b")
-tap(4, 6)                   -- S1: side a is the sample select, not modulatable
-assert(L.st[1][1].target.btn == "S1" and L.st[1][1].target.side == "b")
+press(1, 6)
+assert(L.st[1][1].target == nil, "pressing patched without a turn")
 frame()
+enc(2, 1)
+assert(L.st[1][1].target and L.st[1][1].target.btn == "T1" and L.st[1][1].target.side == "a")
+local dep0 = params:get("t1_l1_depth")
+enc(2, 2)
+assert(params:get("t1_l1_depth") > dep0, "turning on did not move the depth")
+enc(3, 1)
+assert(L.st[1][1].target.side == "b", "E3 did not move the patch to side b")
+frame()
+release(1, 6)
+assert(G.patch == nil)
+press(4, 6)                 -- S1: side a is the sample select, not modulatable
+enc(2, 1)
+assert(L.st[1][1].target.btn == "T1", "S1's sample select got patched")
+enc(3, 1)
+assert(L.st[1][1].target.btn == "S1" and L.st[1][1].target.side == "b")
+release(4, 6)
 release(14, 6)
+-- the other way round: control first, then the LFO
+press(1, 6) press(14, 7) enc(2, 1) release(14, 7) release(1, 6)
+assert(L.st[1][2].target and L.st[1][2].target.btn == "T1", "control-then-LFO did not patch")
+-- CLEAR + LFO unpatches it
+press(14, 8) tap(14, 7) release(14, 8)
+assert(L.st[1][2].target == nil, "CLEAR + LFO did not unpatch")
 for _ = 1, 40 do L.step(1 / 30) St.push_modulated() end
 
 -- swing
@@ -625,15 +657,15 @@ tap(16, 8)
 
 -- snapshots: SHIFT + PLAY opens the page
 local N = dd.snap
-press(14, 8) tap(1, 8) release(14, 8)
+key(2, 1) tap(1, 8) key(2, 0)
 assert(St.page == "snap", "shift + play did not open SNAP")
 assert(St.playing, "shift + play should not touch transport")
 -- a short shift-hold saves nothing, a full one saves
-press(14, 8) press(4, 1) pump(1) release(4, 1) release(14, 8)
+key(2, 1) press(4, 1) pump(1) release(4, 1) key(2, 0)
 assert(not N.has(4), "short hold saved")
-press(14, 8) press(3, 1)
+key(2, 1) press(3, 1)
 for _ = 1, 8 do pump(1) G.redraw() redraw() end
-release(3, 1) release(14, 8)
+release(3, 1) key(2, 0)
 assert(N.has(3), "hold did not save")
 frame()
 -- change things, then load while playing: lands on a beat
@@ -685,22 +717,23 @@ for t = 1, S.NTRACKS do
 end
 assert(math.abs(params:get("t1_level") - 0.8) < 1e-6 and St.sel == 1, "init patch not default")
 -- SHIFT alone flashes the last step on MAIN
-press(14, 8) tap(1, 8) release(14, 8)
-press(14, 8) frame() release(14, 8)
-press(14, 8) tap(1, 8) release(14, 8)
--- SHIFT + STOP + hold deletes; a short hold does not, nor does it leave FILL on
+key(2, 1) tap(1, 8) key(2, 0)
+key(2, 1) frame() key(2, 0)
+key(2, 1) tap(1, 8) key(2, 0)
+-- CLEAR + hold deletes; a short hold does not, and neither touches FILL
 local fill0 = St.fill
-press(14, 8) press(2, 8) press(3, 1) pump(1) release(3, 1) release(2, 8) release(14, 8)
+press(14, 8) press(3, 1) pump(1) release(3, 1) release(14, 8)
 assert(N.has(3), "short delete hold deleted")
 assert(St.fill == fill0, "delete chord toggled FILL")
-press(14, 8) press(2, 8) press(3, 1)
+press(14, 8) press(3, 1)
 for _ = 1, 8 do pump(1) G.redraw() redraw() end
-release(3, 1) release(2, 8) release(14, 8)
+release(3, 1) release(14, 8)
 assert(not N.has(3), "hold did not delete")
+assert(St.page == "snap", "CLEAR used for a delete still reset something")
 -- SHIFT + STOP alone on SNAP is still FILL while held
-press(14, 8) press(2, 8)
+key(2, 1) press(2, 8)
 assert(St.fill, "shift + stop on SNAP did not fill")
-release(2, 8) release(14, 8)
+release(2, 8) key(2, 0)
 assert(not St.fill, "fill outlived STOP")
 frame()
 -- KITS: tap one for every track; hold one and press tracks for only those
@@ -716,9 +749,9 @@ St.audition(1)
 assert(last.set and calls.trig, "no hit")
 assert(math.abs(params:get("t1_T1a") - S.VOICES[1].tone.T1.a.def) < 1e-6, "FM pitch moved WARM's")
 -- a snapshot carries the kits; INIT puts every track back on WARM
-press(14, 8) press(5, 1)
+key(2, 1) press(5, 1)
 for _ = 1, 8 do pump(1) end
-release(5, 1) release(14, 8)
+release(5, 1) key(2, 0)
 tap(2, 7)
 tap(5, 1)
 assert(S.kit_of(1) == 3 and S.kit_of(2) == 2 and math.abs(params:get("t1_k3_T1a") - 80) < 1e-6,
@@ -727,65 +760,73 @@ tap(10, 1)
 for t = 1, S.NTRACKS do assert(S.kit_of(t) == 1, "init left track " .. t .. " off WARM") end
 press(1, 7) release(1, 7)
 frame()
-press(14, 8) tap(1, 8) release(14, 8)
+key(2, 1) tap(1, 8) key(2, 0)
 assert(St.page == "main")
 tap(1, 8)
 pump(4)
 
 -- FILL is momentary: on with SHIFT + STOP, off with STOP, whatever SHIFT does
 assert(St.page == "main" and St.playing)
-press(14, 8) press(2, 8)
+key(2, 1) press(2, 8)
 assert(St.fill and St.playing, "shift + stop should fill, not stop")
-release(14, 8)
+key(2, 0)
 assert(St.fill, "fill should last as long as STOP")
 frame()
 release(2, 8)
 assert(not St.fill and St.playing, "fill not released with STOP")
 
--- K2 and K3 act on release; together they reset and do nothing else
+-- SHIFT (K2) + K3 is play / stop, at once, and nothing else
+key(2, 1) key(3, 1)
+assert(not St.playing, "K2 + K3 did not stop")
+key(3, 0) key(2, 0)
+assert(St.page == "main", "K2 + K3 also turned the page")
+key(2, 1) key(3, 1) key(3, 0) key(2, 0)
+assert(St.playing, "K2 + K3 did not play")
+-- K2 tapped alone goes home from any page, and is nothing on MAIN
+tap(15, 8) key(2, 1) key(2, 0)
+assert(St.page == "main", "K2 tap did not go back to MAIN")
 key(2, 1) key(2, 0)
-assert(not St.playing, "K2 did not stop")
-key(2, 1) key(2, 0)
-assert(St.playing, "K2 did not play")
+assert(St.page == "main" and St.playing, "K2 tap on MAIN did something")
 tap(15, 8)
 params:set("t1_pan", 0.6)
 params:set("t1_tilt", -0.4)
 St.select(1)
-key(2, 1) key(3, 1) key(2, 0) key(3, 0)
-assert(params:get("t1_pan") == 0 and params:get("t1_tilt") == 0, "K2+K3 did not reset pan/tilt")
-assert(St.playing and St.page == "mix", "K2+K3 also did K2's or K3's job")
+tap(14, 8)
+assert(params:get("t1_pan") == 0 and params:get("t1_tilt") == 0, "CLEAR did not reset pan/tilt")
+assert(St.playing and St.page == "mix", "CLEAR also did K2's or K3's job")
 tap(15, 8)
 -- on a control: the track's values, or the held steps' locks
 params:set("t1_T2a", 3.5)
-press(2, 6) key(3, 1) key(2, 1) key(3, 0) key(2, 0) release(2, 6)
-assert(math.abs(params:get("t1_T2a") - S.VOICES[1].tone.T2.a.def) < 1e-6, "K2+K3 did not reset T2")
+press(2, 6) tap(14, 8) release(2, 6)
+assert(math.abs(params:get("t1_T2a") - S.VOICES[1].tone.T2.a.def) < 1e-6, "CLEAR did not reset T2")
 press(5, 1) press(1, 6) enc(3, 4) release(1, 6)
 assert(St.tracks[1].steps[5].locks.T1b, "lock for the reset test")
-press(1, 6) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(1, 6) release(5, 1)
-assert(St.tracks[1].steps[5] and not St.tracks[1].steps[5].locks, "K2+K3 did not clear locks")
+press(1, 6) tap(14, 8) release(1, 6) release(5, 1)
+assert(St.tracks[1].steps[5] and not St.tracks[1].steps[5].locks, "CLEAR did not clear locks")
+tap(5, 1)  -- close the lock left open on step 5
 -- TC over the template
 St.tracks[1].tpl.prob = 40
-press(9, 6) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(9, 6)
-assert(St.tracks[1].tpl.prob == 100, "K2+K3 did not reset the template")
+press(9, 6) tap(14, 8) release(9, 6)
+assert(St.tracks[1].tpl.prob == 100, "CLEAR did not reset the template")
 -- swing, an LFO, a COLOUR cell, the main page's speed
-press(3, 8) enc(2, 5) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(3, 8)
-assert(params:get("swing") == 50, "K2+K3 did not reset swing")
-press(14, 6) enc(2, 5) enc(3, 5) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(14, 6)
+press(3, 8) enc(2, 5) tap(14, 8) release(3, 8)
+assert(params:get("swing") == 50, "CLEAR did not reset swing")
+press(14, 6) enc(2, 5) enc(3, 5) tap(14, 8) release(14, 6)
 assert(math.abs(params:get("t1_l1_rate") - 0.5) < 1e-6 and math.abs(params:get("t1_l1_depth") - 0.4) < 1e-6,
-  "K2+K3 did not reset the LFO")
+  "CLEAR did not reset the LFO")
 tap(16, 8)
 St.col_sel = 1
 enc(2, 20) enc(3, 1)
-key(2, 1) key(3, 1) key(2, 0) key(3, 0)
-assert(params:get("col_drive") == 0 and params:get("col_drivetype") == 1, "K2+K3 did not reset the cell")
+tap(14, 8)
+assert(params:get("col_drive") == 0 and params:get("col_drivetype") == 1, "CLEAR did not reset the cell")
 tap(16, 8)
 St.tracks[1].speed = 6
-key(2, 1) key(3, 1) key(2, 0) key(3, 0)
-assert(St.tracks[1].speed == 3 and St.playing, "K2+K3 on main")
+tap(14, 8)
+assert(St.tracks[1].speed == 3 and St.playing, "CLEAR on main")
 
 -- PERFORM: SHIFT + MIX
 local F = dd.perform
-press(14, 8) tap(15, 8) release(14, 8)
+key(2, 1) tap(15, 8) key(2, 0)
 assert(St.page == "perform", "shift + mix did not open PERFORM")
 -- REPEAT: a pad punches, a second takes over, letting it go hands back
 press(1, 1)
@@ -819,35 +860,35 @@ for f = 1, #F.STRIPS do
     assert(F.active[f] == nil, "strip " .. f .. " pad " .. i .. " stuck")
   end
 end
--- DROP latched with SHIFT, through a page change, cleared by K2+K3
-press(14, 8) tap(9, 4) release(14, 8)
+-- DROP latched with SHIFT, through a page change, cleared by CLEAR
+key(2, 1) tap(9, 4) key(2, 0)
 assert(St.pmute[1] and St.pmute[2] and not St.pmute[3], "DROP did not take the kicks out")
 assert(last.strip[2] == "pmute", "DROP not sent")
-press(14, 8) tap(16, 3) release(14, 8)   -- CRUSH latched too
+key(2, 1) tap(16, 3) key(2, 0)   -- CRUSH latched too
 press(13, 1)                              -- a held GATE
 tap(15, 8) tap(15, 8)                     -- off to MIX and back to MAIN
 assert(F.active[2] == nil, "a held pad outlived the page")
 assert(F.active[8] and F.active[6], "latches did not survive the page")
-press(14, 8) tap(15, 8) release(14, 8)
+key(2, 1) tap(15, 8) key(2, 0)
 frame()
-key(2, 1) key(3, 1) key(2, 0) key(3, 0)
-assert(not St.pmute[1] and F.active[8] == nil and F.active[6] == nil, "K2+K3 did not clear PERFORM")
-press(14, 8) tap(15, 8) release(14, 8)
+tap(14, 8)
+assert(not St.pmute[1] and F.active[8] == nil and F.active[6] == nil, "CLEAR did not clear PERFORM")
+key(2, 1) tap(15, 8) key(2, 0)
 assert(St.page == "main")
 
 -- the hidden TAPE: SHIFT + COLOUR, held
-press(14, 8) press(16, 8)
+key(2, 1) press(16, 8)
 assert(St.page == "main", "SHIFT + COLOUR should not change page")
 assert(G.overlay() == "tape" and last.punch[1] == 2, "tape did not start")
-release(14, 8)
+key(2, 0)
 enc(2, -3) enc(3, -1)
 assert(params:get("tape_pitch") == -15 and params:get("tape_len") == 4, "tape encoders")
 assert(last.punchSet[1] == 2 and math.abs(last.punchSet[5] - 2 ^ (-15 / 12)) < 1e-9, "tape pitch not sent")
 key(2, 1) key(2, 0)
 assert(St.playing, "K2 under the TAPE should be quiet")
 frame()
-key(2, 1) key(3, 1) key(2, 0) key(3, 0)
-assert(params:get("tape_pitch") == -12 and params:get("tape_len") == 5, "K2+K3 did not reset the tape")
+tap(14, 8)
+assert(params:get("tape_pitch") == -12 and params:get("tape_len") == 5, "CLEAR did not reset the tape")
 release(16, 8)
 assert(last.unpunch[1] == 2 and G.overlay() == nil and St.page == "main", "tape not let go")
 
@@ -899,7 +940,7 @@ do
   end
 end
 
--- MAIN: E1 picks the pair, E2/E3 turn it, K2+K3 resets it; E1 leaves the track
+-- MAIN: E1 picks the pair, E2/E3 turn it, CLEAR resets it; E1 leaves the track
 tap(1, 8)
 local sel0 = St.sel
 enc(1, -5)
@@ -907,8 +948,8 @@ assert(St.main_pair == 1 and St.sel == sel0, "E1 on MAIN moved the track")
 local trm = St.track()
 enc(2, 3) assert(trm.len == 19, "E2 did not set length")
 enc(3, 2) assert(trm.speed == 5, "E3 did not set timing")
-key(2, 1) key(3, 1) key(2, 0) key(3, 0)
-assert(trm.len == 16 and trm.speed == 3, "K2+K3 did not reset length/timing")
+tap(14, 8)
+assert(trm.len == 16 and trm.speed == 3, "CLEAR did not reset length/timing")
 enc(1, 1)
 enc(2, 2) enc(3, 30) redraw()
 assert(trm.dir == 3 and trm.dilla == 30, "pair 2 not turned")
@@ -940,8 +981,8 @@ trm.dilla = d0
 local off, worst = dillaed()
 assert(off, "DILLA did not move anything")
 assert(worst <= (0.25 * S.DILLA_MAX * 0.3) + TOL, "DILLA went too far: " .. worst)
-key(2, 1) key(3, 1) key(2, 0) key(3, 0)
-assert(trm.dir == 1 and trm.dilla == 0, "K2+K3 did not reset direction/DILLA")
+tap(14, 8)
+assert(trm.dir == 1 and trm.dilla == 0, "CLEAR did not reset direction/DILLA")
 -- the character, not just the size: at 100 % the hats' off-beats sit near
 -- the triplet and the snare lays back behind the beat
 do
@@ -985,11 +1026,17 @@ do
   local t = St.sel
   local before = calls.sampListen or 0
   local had = St.tracks[t].steps[16]
+  -- S1 + step on its own is a lock like any control, not a recording
+  press(4, 6) tap(15, 4) release(4, 6)
+  assert(not R.active(), "S1 + step armed without SHIFT")
+  St.tracks[t].steps[63] = nil
   press(4, 6)
+  key(2, 1)
   frame()                       -- the length picker
   tap(16, 1)
-  assert(R.t == t and R.steps == 16, "S1 + step did not arm")
-  assert(St.tracks[t].steps[16] == had, "S1 + step touched the step")
+  key(2, 0)
+  assert(R.t == t and R.steps == 16, "S1 + SHIFT + step did not arm")
+  assert(St.tracks[t].steps[16] == had, "S1 + SHIFT + step touched the step")
   assert((calls.sampListen or 0) == before + 1, "THRESH did not listen")
   assert(math.abs(last.sampListen[1] - (16 * 0.25 * BS)) < 1e-6, "wrong take length")
   release(4, 6)
@@ -1014,20 +1061,89 @@ do
   assert(params:get(St.pid(t, "file")):match("drumdrum/rec/.+%.wav$"), "take not loaded")
   assert(params:get(St.pid(t, "S1b")) == 1, "first take did not raise the level")
   assert(not R.active() and G.overlay() == nil)
-  -- the same step twice disarms; K2 cancels; K3 starts now
-  press(4, 6) tap(3, 2) tap(3, 2) release(4, 6)
+  -- the same step twice disarms; CLEAR cancels; K3 starts now
+  press(4, 6) key(2, 1) tap(3, 2) tap(3, 2) key(2, 0) release(4, 6)
   assert(not R.active(), "second tap did not disarm")
-  press(4, 6) tap(3, 2) release(4, 6)
-  key(2, 1) key(2, 0)
-  assert(not R.active() and St.playing, "K2 should cancel, not stop")
+  press(4, 6) key(2, 1) tap(3, 2) key(2, 0) release(4, 6)
+  tap(14, 8)
+  assert(not R.active() and St.playing, "CLEAR should cancel, not stop")
   enc(1, -1)
-  press(4, 6) tap(3, 2) release(4, 6)
+  press(4, 6) key(2, 1) tap(3, 2) key(2, 0) release(4, 6)
   starts = calls.sampStart or 0
   key(3, 1) key(3, 0)
   assert((calls.sampStart or 0) == starts + 1 and St.page == "main", "K3 should start now")
   R.cancel()
   for _ = 1, 3 do enc(3, 1) frame() end
   params:set("rec_src", #R.SRCS) frame()
+end
+
+-- CLEAR + step: back to a plain hit, still there
+do
+  St.page = "main"
+  G.release_all()
+  local tr = St.track()
+  local s9 = S.new_step()
+  s9.prob, s9.cond, s9.locks = 30, 3, { T1a = 0.9 }
+  tr.steps[9] = s9
+  press(14, 8) tap(9, 1) release(14, 8)
+  local st9 = tr.steps[9]
+  assert(st9 and st9.on and st9.prob == 100 and st9.cond == 1 and not st9.locks,
+    "CLEAR + step did not make a plain hit")
+  -- CLEAR + empty step places nothing
+  tr.steps[10] = nil
+  press(14, 8) tap(10, 1) release(14, 8)
+  assert(tr.steps[10] == nil, "CLEAR + empty step placed one")
+
+  -- CLEAR + track: a short hold keeps the pattern, a long one clears it
+  local t = St.sel
+  press(14, 8) press(4 + t, 8) pump(1) G.redraw() release(4 + t, 8) release(14, 8)
+  assert(next(tr.steps) ~= nil, "short CLEAR + track wiped")
+  press(14, 8) press(4 + t, 8)
+  for _ = 1, 8 do pump(1) G.redraw() end
+  release(4 + t, 8) release(14, 8)
+  assert(next(tr.steps) == nil, "CLEAR + track hold did not wipe")
+  assert(St.page == "main" and St.sel == t, "the wipe did more than wipe")
+  tr.steps[1] = S.new_step()
+
+  -- SHIFT + E2 on a sound control: every track
+  local before = {}
+  for u = 1, S.NTRACKS do before[u] = params:get_raw(St.pid(u, "N1b")) end
+  press(7, 6) key(2, 1) enc(3, 5) frame() key(2, 0) release(7, 6)
+  for u = 1, S.NTRACKS do
+    assert(params:get_raw(St.pid(u, "N1b")) > before[u], "SHIFT + E3 missed track " .. u)
+  end
+  -- CLEAR + control resets it
+  press(14, 8) tap(7, 6) release(14, 8)
+  assert(params:get(St.pid(t, "N1b")) == St.DEFAULTS[St.pid(t, "N1b")], "CLEAR + control did not reset")
+
+  -- the template lights TC brighter (drawn, not asserted on an LED)
+  tr.tpl.prob = 50 frame() tr.tpl.prob = 100
+
+  -- MIX: SHIFT + E2 pans every track; CLEAR + a pan button centres
+  tap(15, 8)
+  key(2, 1) enc(2, 3) frame() key(2, 0)
+  for u = 1, S.NTRACKS do
+    assert(params:get(St.pid(u, "pan")) > 0, "SHIFT + E2 on MIX missed track " .. u)
+  end
+  press(14, 8) tap(2, 1) release(14, 8)
+  assert(params:get("t1_pan") == 0, "CLEAR + pan did not centre")
+  tap(14, 8)
+  assert(params:get("t1_pan") == 0, "CLEAR on MIX did not reset")
+  for u = 1, S.NTRACKS do params:set(St.pid(u, "pan"), 0) end
+  tap(15, 8)
+
+  -- PERFORM: track buttons mute; CLEAR + pad drops that strip's latch
+  key(2, 1) tap(15, 8) key(2, 0)
+  assert(St.page == "perform")
+  tap(7, 8)
+  assert(St.tracks[3].mute, "PERFORM track button did not mute")
+  tap(7, 8)
+  key(2, 1) tap(16, 3) key(2, 0)
+  assert(dd.perform.active[6], "latch for the CLEAR test")
+  press(14, 8) tap(15, 3) release(14, 8)
+  assert(dd.perform.active[6] == nil and St.page == "perform", "CLEAR + pad did not unlatch")
+  key(2, 1) key(2, 0)
+  assert(St.page == "main")
 end
 
 -- stop resets

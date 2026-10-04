@@ -14,7 +14,8 @@
 -- together and the repeat is filtered, in the engine's fixed order whatever
 -- order they were pressed in. Within a strip the newest pad wins, and
 -- letting it go hands back to one still held. SHIFT + pad latches it;
--- the same again lets go. K2+K3 on the page lets go of every latch.
+-- the same again lets go. CLEAR + a pad lets go of its strip's latch, CLEAR
+-- on its own of every latch.
 --
 -- The timed pads are worked out from the tempo when pressed and sit on the
 -- beat grid: REPEAT loops from the last line of its own length, so its
@@ -216,7 +217,13 @@ function F.release_held()
   end
 end
 
--- K2+K3: everything off
+-- CLEAR + pad: that strip's latch off
+function F.unlatch(f)
+  F.latched[f] = nil
+  F.update(f)
+end
+
+-- CLEAR on its own: everything off
 function F.clear()
   for f = 1, #F.STRIPS do
     F.held[f] = {}

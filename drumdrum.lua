@@ -6,29 +6,19 @@
 -- 8 voices, synth + sample each
 -- BD1 BD2 CLP SNR PRC1 PRC2 HAT CYM
 --
--- E1 track (COLOUR: cell, through
---    BUSS DUCK TEXTURE SPACE;
---    MAIN: the pair below)
--- E2 / E3 the open screen's pair
--- main: LENGTH / TIMING,
---    DIRECTION / DILLA
--- grid track buttons: track
--- mix:  E2 pan    E3 tilt
--- swing (hold grid SWING):
---    E1 rain  E2 amount  E3 grid
--- colour: the grid is the clip
---    launcher
--- K2 play/stop  K3 next page
--- K2+K3 reset what E2/E3 turn
+-- K2 SHIFT (tap alone: back to main)
+-- K3 next page
+-- K2 + K3 play / stop
 -- K1 held: fine adjust
+-- E1 track (main: pair, colour: cell)
+-- E2 / E3 the open screen's pair
+-- SHIFT + E2 / E3: every track
 --
--- sampler: hold S1 + tap a step
---    to record that many steps;
---    E1 start E2 level E3 source
---    K2 cancel K3 now / stop
+-- grid CLEAR takes things away;
+-- tap it alone to reset the screen
 --
--- grid: see README
-
+-- see README
+--
 engine.name = "DrumDrum"
 
 local S  = include("drumdrum/lib/spec")
@@ -43,8 +33,7 @@ local R  = include("drumdrum/lib/sampler")
 local U  = include("drumdrum/lib/ui")
 
 local k1 = false
-local keys = {}         -- K2, K3 down
-local chord = false     -- K2 and K3 went down together: neither does its own job
+local k3_chord = false  -- K3 went down under SHIFT: it was play / stop, its release is nothing
 local screen_metro, grid_metro, lfo_metro
 local FPS = 30
 local polls = {}
@@ -79,13 +68,22 @@ local function ctrl_enc(btn, side, d)
     return
   end
 
-  if p.special == "sample" then
+  if p.special == "sample" and not (G.shift and #held == 0) then
     St.sample_delta(t, d)
     return
   end
 
   local key = btn .. side
   local id = St.pid(t, key)
+  -- SHIFT held, no steps: the same control on every track, each in its own
+  -- range (a voice's PITCH spans differ, and so do kits' T params)
+  if G.shift and #held == 0 then
+    for u = 1, S.NTRACKS do
+      if p.special == "sample" then St.sample_delta(u, d)
+      else St.delta(St.pid(u, key), d, k1) end
+    end
+    return
+  end
   if #held > 0 then
     local q = St.raw_step(id, k1)
     for _, i in ipairs(held) do
@@ -102,7 +100,7 @@ local function ctrl_enc(btn, side, d)
   end
 end
 
--- K2 on a control with steps held: drop that button's locks from them
+-- CLEAR on a control with steps held: drop that button's locks from them
 local function clear_locks(btn)
   local tr = St.track()
   for _, i in ipairs(G.held_steps()) do
@@ -116,9 +114,27 @@ local function clear_locks(btn)
   G.mark_edited()
 end
 
+-- the tracks an encoder turn moves: the selected one, or with SHIFT all
+local function enc_tracks()
+  if not G.shift then return { St.sel } end
+  local out = {}
+  for t = 1, S.NTRACKS do out[t] = t end
+  return out
+end
+
+-- MAIN's LENGTH / TIMING / DIRECTION / DILLA: the selected track, or with
+-- SHIFT held every track, all set to the selected track's new value
+local function main_set(field, v)
+  if G.shift then
+    for t = 1, S.NTRACKS do St.tracks[t][field] = v end
+  else
+    St.track()[field] = v
+  end
+end
+
 -- -------------------------------------------------------------------- reset
 --
--- K2+K3: whatever the open screen's E2 and E3 turn goes back to where the
+-- CLEAR on its own: whatever the open screen's E2 and E3 turn goes back to where the
 -- script starts it. Over held steps that means the steps: a sound control
 -- loses its locks (back to the track's value), TC and P go back to a plain
 -- step. With none held, TC and P reset the template.
@@ -127,8 +143,10 @@ local function reset_ctrl(btn)
   local t = St.sel
   local b = S.BTN[btn]
   if b.kind == "lfo" then
+    -- back to how it starts: unpatched as well
     local pre = St.pid(t, "l" .. b.lfo .. "_")
     for _, k in ipairs({ "rate", "depth", "shape" }) do St.reset(pre .. k) end
+    L.unpatch(t, b.lfo)
     return
   end
   local pair = S.pair(t, btn)
@@ -163,13 +181,15 @@ local function reset()
   elseif kind == "ctrl" then
     reset_ctrl(btn)
   elseif kind == "rec" then
-    St.reset("rec_thresh")
+    R.cancel()
   elseif kind == "swing" then
     St.reset("swing")
     St.reset("swing_grid")
   elseif St.page == "mix" then
-    St.reset(St.pid(St.sel, "pan"))
-    St.reset(St.pid(St.sel, "tilt"))
+    for _, t in ipairs(enc_tracks()) do
+      St.reset(St.pid(t, "pan"))
+      St.reset(St.pid(t, "tilt"))
+    end
   elseif St.page == "colour" then
     local cell = S.COLOUR[St.col_sel]
     St.reset("col_" .. cell.a.arg)
@@ -177,11 +197,12 @@ local function reset()
   elseif St.page == "perform" then
     F.clear()
   elseif St.page == "main" then
-    local tr = St.track()
     if St.main_pair == 1 then
-      tr.len, tr.speed = 16, 3
+      main_set("len", 16)
+      main_set("speed", 3)
     else
-      tr.dir, tr.dilla = 1, 0
+      main_set("dir", 1)
+      main_set("dilla", 0)
     end
   end
 end
@@ -237,6 +258,8 @@ function init()
   Q.rain = C.rain
   Q.on_rain = C.splash
   G.init(St, Q, L, N, F, C, R)
+  G.on_clear = function() reset() St.dirty = true end
+  G.on_clear_ctrl = function(btn) reset_ctrl(btn) St.dirty = true end
   U.init(St, G, L, N, F, C, R)
   St.on_hit = function(t, vel) U.ripple(t, vel) end
 
@@ -315,73 +338,77 @@ function cleanup()
 end
 
 -- ---------------------------------------------------------------------- keys
+--
+-- K2 is SHIFT. Tapped on its own, with nothing done while it was down, it
+-- goes back to MAIN. K3 turns the page when it comes up; pressed under
+-- SHIFT it is play / stop at once, and then its release does nothing.
 
--- K2 and K3 act when they come UP, so that pressing both together can be
--- told from pressing either: the chord resets, and then neither key's
--- release does anything else
-local function press(n)
+local function k3_up()
   local kind, btn = G.overlay()
   -- quiet under the TAPE: its hand is on the grid, the other on E2/E3
   if kind == "tape" then return end
   if kind == "rec" then
-    if n == 2 then R.cancel() else R.now() end
+    R.now()
     return
   end
   if kind == "ctrl" then
     local b = S.BTN[btn]
     if b.kind == "lfo" then
       local id = St.pid(St.sel, "l" .. b.lfo .. "_shape")
-      local n_sh = #S.LFO_SHAPES
       local cur = math.floor(params:get(id) + 0.5)
-      cur = ((cur - 1 + ((n == 3) and 1 or -1)) % n_sh) + 1
-      params:set(id, cur)
-      St.dirty = true
-      return
+      params:set(id, (cur % #S.LFO_SHAPES) + 1)
     end
-    if n == 2 and #G.held_steps() > 0 and S.SOUND_KIND[b.kind] then
-      clear_locks(btn)
-      St.dirty = true
-    end
-    -- otherwise the keys are quiet under an open control: a thumb resting
-    -- on K2 while a finger holds a step should not stop the music
+    -- otherwise quiet under an open control
     return
   end
-
-  if n == 2 then
-    Q.toggle()
-  elseif n == 3 then
-    local order = { main = "mix", mix = "colour", colour = "main" }
-    St.page = order[St.page] or "main"   -- SNAP and PERFORM go back to MAIN
-    G.release_all()
-  end
-  St.dirty = true
+  local order = { main = "mix", mix = "colour", colour = "main" }
+  St.page = order[St.page] or "main"   -- SNAP and PERFORM go back to MAIN
+  G.release_all()
 end
 
 function key(n, z)
   if n == 1 then
     k1 = (z == 1)
-    return
-  end
-  keys[n] = (z == 1)
-  if z == 1 then
-    if keys[2] and keys[3] then
-      chord = true
-      reset()
-      St.dirty = true
+  elseif n == 2 then
+    G.shift = (z == 1)
+    if z == 1 then
+      G.shift_used = false
+    elseif not G.shift_used and St.page ~= "main" then
+      St.page = "main"
+      G.release_all()
     end
-    return
+  elseif z == 1 then
+    if G.shift then
+      G.shift_used = true
+      k3_chord = true
+      Q.toggle()
+    end
+  elseif k3_chord then
+    k3_chord = false
+  else
+    k3_up()
   end
-  if chord then
-    if not keys[2] and not keys[3] then chord = false end
-    return
-  end
-  press(n)
+  St.dirty = true
 end
 
 -- ------------------------------------------------------------------ encoders
 
+-- hold an LFO and a sound control: the first turn of E2 or E3 patches
+-- that side, turning on is the depth
+local function patch_enc(n, d)
+  local pt = G.patch
+  local t = St.sel
+  local side = (n == 2) and "a" or "b"
+  if L.side_on(t, pt.lfo, pt.btn) == side then
+    St.delta(St.pid(t, "l" .. pt.lfo .. "_depth"), d, k1)
+  else
+    L.set_target(t, pt.lfo, pt.btn, side)
+  end
+end
+
 function enc(n, d)
   local kind, btn = G.overlay()
+  if G.shift then G.shift_used = true end
 
   if n == 1 then
     if kind == "rec" then
@@ -395,7 +422,7 @@ function enc(n, d)
     else
       local t = util.clamp(St.sel + d, 1, S.NTRACKS)
       if t ~= St.sel then
-        G.held = {}
+        G.drop_held()
         St.select(t)
       end
     end
@@ -411,9 +438,13 @@ function enc(n, d)
     else params:delta("tape_len", d) end
   elseif kind == "ctrl" then
     local b = S.BTN[btn]
-    if b.kind == "lfo" then
-      local pre = St.pid(St.sel, "l" .. b.lfo .. "_")
-      St.delta(pre .. ((n == 2) and "rate" or "depth"), d, k1)
+    if b.kind == "lfo" and G.patch then
+      patch_enc(n, d)
+    elseif b.kind == "lfo" then
+      local k = (n == 2) and "rate" or "depth"
+      for _, t in ipairs(enc_tracks()) do
+        St.delta(St.pid(t, "l" .. b.lfo .. "_" .. k), d, k1)
+      end
     else
       ctrl_enc(btn, (n == 2) and "a" or "b", d)
     end
@@ -421,13 +452,8 @@ function enc(n, d)
     if n == 2 then params:delta("swing", d * (k1 and 0.25 or 1))
     else params:delta("swing_grid", d) end
   elseif St.page == "mix" then
-    local t = St.sel
-    if n == 2 then
-      if G.shift then St.delta(St.pid(t, "level"), d, k1)
-      else St.delta(St.pid(t, "pan"), d, k1) end
-    else
-      St.delta(St.pid(t, "tilt"), d, k1)
-    end
+    local k = (n == 2) and "pan" or "tilt"
+    for _, t in ipairs(enc_tracks()) do St.delta(St.pid(t, k), d, k1) end
   elseif St.page == "colour" then
     local cell = S.COLOUR[St.col_sel]
     local p = (n == 2) and cell.a or cell.b
@@ -435,11 +461,11 @@ function enc(n, d)
   elseif St.page == "main" then
     local tr = St.track()
     if St.main_pair == 1 then
-      if n == 2 then tr.len = util.clamp(tr.len + d, 1, S.NSTEPS)
-      else tr.speed = util.clamp(tr.speed + d, 1, #S.SPEEDS) end
+      if n == 2 then main_set("len", util.clamp(tr.len + d, 1, S.NSTEPS))
+      else main_set("speed", util.clamp(tr.speed + d, 1, #S.SPEEDS)) end
     else
-      if n == 2 then tr.dir = util.clamp(tr.dir + d, 1, #S.DIRS)
-      else tr.dilla = util.clamp(tr.dilla + d, 0, 100) end
+      if n == 2 then main_set("dir", util.clamp(tr.dir + d, 1, #S.DIRS))
+      else main_set("dilla", util.clamp(tr.dilla + d, 0, 100)) end
     end
   else
     -- SNAP, PERFORM: the tempo
