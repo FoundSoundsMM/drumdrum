@@ -24,15 +24,70 @@ util = {
 _path = { audio = "/home/we/dust/audio/" }
 
 local draws = 0
-screen = setmetatable({}, { __index = function()
-  return function() draws = draws + 1 end
+-- The screen stub measures text the way norns' 04B_03 font roughly does
+-- (a touch wide, about 5 px a character at size 8) and remembers every
+-- string's box for the frame. frame() then fails on any two that touch:
+-- overlapping labels were only ever caught by squinting at the OLED.
+local txt = { x = 0, y = 0, size = 8, boxes = {} }
+local function txt_w(s) return #tostring(s) * 5 * (txt.size / 8) end
+local function txt_box(s, x0)
+  local w = txt_w(s)
+  local h = math.floor(txt.size * 0.75 + 0.5)
+  txt.boxes[#txt.boxes + 1] = { s = tostring(s), x0 = x0, x1 = x0 + w - 1,
+    y0 = txt.y - h + 1, y1 = txt.y }
+end
+local SCREEN = {
+  move = function(x, y) txt.x, txt.y = x, y end,
+  font_size = function(n) txt.size = n end,
+  text_extents = function(s) return txt_w(s), txt.size end,
+  text = function(s) txt_box(s, txt.x) end,
+  text_right = function(s) txt_box(s, txt.x - txt_w(s)) end,
+  text_center = function(s) txt_box(s, txt.x - (txt_w(s) / 2)) end,
+}
+screen = setmetatable({}, { __index = function(_, k)
+  local f = SCREEN[k]
+  return function(...)
+    draws = draws + 1
+    if f then return f(...) end
+  end
 end })
+local overlaps = {}
+local function check_overlaps(where)
+  local b = txt.boxes
+  for i = 1, #b do
+    for j = i + 1, #b do
+      local p, q = b[i], b[j]
+      if p.s ~= "" and q.s ~= "" and p.x0 <= q.x1 and q.x0 <= p.x1
+        and p.y0 <= q.y1 and q.y0 <= p.y1 then
+        local k = string.format("%s: '%s' x '%s'", where, p.s, q.s)
+        if not overlaps[k] then
+          overlaps[k] = true
+          overlaps[#overlaps + 1] = k
+        end
+      end
+    end
+    if b[i].x0 < -1 or b[i].x1 > 128 then
+      local k = string.format("%s: '%s' runs off screen", where, b[i].s)
+      if not overlaps[k] then
+        overlaps[k] = true
+        overlaps[#overlaps + 1] = k
+      end
+    end
+  end
+  txt.boxes = {}
+end
+
+-- every engine.trig, with the beat it happened on
+local trig_log = {}
 
 local calls, last = {}, {}
 engine = setmetatable({ name = "" }, { __index = function(_, k)
   return function(...)
     calls[k] = (calls[k] or 0) + 1
     last[k] = { ... }
+    if k == "trig" and trig_log then
+      trig_log[#trig_log + 1] = { t = select(1, ...) + 1, beat = clock.get_beats() }
+    end
   end
 end })
 
@@ -48,37 +103,81 @@ local gobj = {
 }
 grid = { connect = function() return gobj end }
 
--- a clock that runs coroutines when told to
-local coros = {}
+-- A clock that behaves like matron's: time runs in 1 ms steps, clock.sync
+-- lands on the next multiple of its quantum (counted from the coroutine's
+-- previous target when it was syncing already), sleeps are in seconds, and a
+-- transport start sets beat 0 and fires every pending sync at once.
+local BS = 0.5          -- 120 bpm
+local DT = 0.001
 local beats = 0
+local coros, wake, last_sync, nid = {}, {}, {}, 0
+local restart = false
+local EPSF = 1.1920929e-07
+
+local function next_beat(base, q, off)
+  off = off or 0
+  local nb = math.ceil((base + EPSF) / q) * q + off
+  while nb < base + EPSF do nb = nb + q end
+  return math.max(nb, 0)
+end
+
+local function resume(id, ...)
+  local co = coros[id]
+  if not co then return end
+  local ok, mode, a, b = coroutine.resume(co, ...)
+  if not ok then error(mode) end
+  if coroutine.status(co) == "dead" then
+    coros[id], wake[id], last_sync[id] = nil, nil, nil
+  elseif mode == "sync" then
+    local base = last_sync[id] or beats
+    local nb = next_beat(base, a, b)
+    last_sync[id] = nb
+    wake[id] = { sync = nb }
+  else
+    last_sync[id] = nil
+    wake[id] = { time = now + a }
+  end
+end
+
 clock = {
   run = function(f, ...)
-    local co = coroutine.create(f)
-    coros[#coros + 1] = co
-    local ok, err = coroutine.resume(co, ...)
-    if not ok then error(err) end
-    return #coros
+    nid = nid + 1
+    coros[nid] = coroutine.create(f)
+    resume(nid, ...)
+    return nid
   end,
-  sleep = function() coroutine.yield() end,
-  sync = function() coroutine.yield() end,
-  cancel = function(id) coros[id] = false end,
-  get_beat_sec = function() return 0.5 end,
+  sleep = function(s) return coroutine.yield("sleep", s) end,
+  sync = function(q, off) return coroutine.yield("sync", q, off) end,
+  cancel = function(id) coros[id], wake[id], last_sync[id] = nil, nil, nil end,
+  get_beat_sec = function() return BS end,
   get_beats = function() return beats end,
-  get_tempo = function() return 120 end,
+  get_tempo = function() return 60 / BS end,
   transport = {},
+  internal = { start = function() restart = true end, stop = function() end },
 }
-local function pump(n)
-  for _ = 1, n do
-    beats = beats + 0.25
-    now = now + 0.125
-    for i = 1, #coros do
-      local co = coros[i]
-      if co and coroutine.status(co) == "suspended" then
-        local ok, err = coroutine.resume(co)
-        if not ok then error(err) end
-      end
-    end
+
+local function step()
+  now = now + DT
+  beats = beats + (DT / BS)
+  if restart then
+    restart = false
+    beats = 0
+    for id, w in pairs(wake) do if w.sync then w.sync = 0 end last_sync[id] = 0 end
+    if clock.transport.start then clock.transport.start() end
   end
+  local due = {}
+  for id, w in pairs(wake) do
+    if (w.sync and beats > w.sync) or (w.time and now >= w.time) then due[#due + 1] = id end
+  end
+  table.sort(due)
+  for _, id in ipairs(due) do
+    if wake[id] then wake[id] = nil resume(id) end
+  end
+end
+
+-- n sixteenths of a beat
+local function pump(n)
+  for _ = 1, math.floor((n * 0.25 * BS / DT) + 0.5) do step() end
 end
 
 metro = { init = function(f, t)
@@ -169,6 +268,7 @@ params = {
   end,
 }
 params:add_number("clock_tempo", "tempo", 1, 300, 120)
+params:add_option("clock_source", "source", { "internal", "midi", "link", "crow" }, 1)
 
 -- ----------------------------------------------------------------- run it
 
@@ -187,9 +287,29 @@ for id, p in pairs(P) do
 end
 print("params: " .. count)
 
+-- the script starts with nothing on the sequencer; the timing tests below
+-- need something to hear, so put the old demo beat in by hand
+for t = 1, S.NTRACKS do
+  assert(next(St.tracks[t].steps) == nil, "init should have an empty pattern")
+end
+local function put(t, steps, extra)
+  for _, i in ipairs(steps) do
+    local s = S.new_step()
+    if extra then for k, v in pairs(extra) do s[k] = v end end
+    St.tracks[t].steps[i] = s
+  end
+end
+put(1, { 1, 7, 11 })
+put(4, { 5, 13 })
+put(7, { 3, 7, 11, 15 }, { vel = 70 })
+put(7, { 1, 5, 9, 13 }, { vel = 45 })
+put(3, { 13 }, { cond = 10 })
+
 local function frame()
   screen_tick = screen_tick or 0
+  txt.boxes = {}
   redraw()
+  check_overlaps(St.page or "?")
   G.redraw()
 end
 
@@ -197,9 +317,82 @@ local function press(x, y) G.key(x, y, 1) end
 local function release(x, y) G.key(x, y, 0) end
 local function tap(x, y) press(x, y) release(x, y) end
 
--- play a few bars
+-- ------------------------------------------------------------- timing
+--
+-- 2 ms is two scheduler ticks of this fake clock; the real one polls every
+-- 1 ms, so anything later than that is the sequencer's fault.
+local TOL = 0.002 / BS
+
+local function off_grid(b, g) return math.abs(b - (math.floor((b / g) + 0.5) * g)) end
+local function first_trig(t)
+  for _, e in ipairs(trig_log) do if e.t == t then return e.beat end end
+end
+local function all_on_grid(g)
+  for _, e in ipairs(trig_log) do
+    if off_grid(e.beat, g) > TOL then return false, e end
+  end
+  return true
+end
+
+-- internal clock: PLAY restarts it, step 1 is beat 0
+beats = 13.37
+trig_log = {}
 tap(1, 8)
 assert(St.playing, "PLAY did not start")
+pump(64)
+assert(math.abs(first_trig(1)) <= TOL, "internal: step 1 not on beat 0: " .. tostring(first_trig(1)))
+local ok, e = all_on_grid(0.25)
+assert(ok, e and ("internal: trig off the grid at beat " .. e.beat))
+
+-- MIDI clock, DAW already rolling: PLAY joins on the next bar line
+params:set("clock_source", 2)
+tap(2, 8)
+assert(not St.playing)
+beats = 37.3
+trig_log = {}
+tap(1, 8)
+assert(St.playing)
+pump(16)
+assert(math.abs(first_trig(1) - 40) <= TOL, "midi join: not on the bar: " .. tostring(first_trig(1)))
+ok, e = all_on_grid(0.25)
+assert(ok, e and ("midi join: off the grid at beat " .. e.beat))
+
+-- the DAW goes back to the top while we play: we go with it
+trig_log = {}
+restart = true
+pump(16)
+assert(St.playing)
+assert(math.abs(first_trig(1)) <= TOL, "midi restart: step 1 not on beat 0: " .. tostring(first_trig(1)))
+ok, e = all_on_grid(0.25)
+assert(ok, e and ("midi restart: off the grid at beat " .. e.beat))
+
+-- the DAW stops: we stop and nothing already scheduled sounds afterwards
+clock.transport.stop()
+assert(not St.playing and St.tracks[1].pos == 0)
+local n = #trig_log
+pump(8)
+assert(#trig_log == n, "a pulse sounded after STOP")
+
+-- the DAW starts from stopped
+restart = true
+trig_log = {}
+pump(64)
+assert(St.playing and math.abs(first_trig(1)) <= TOL, "midi start: step 1 not on beat 0")
+
+-- a nudged step lands exactly that far off its line, early or late
+St.tracks[1].steps[7].nudge = -25
+St.tracks[1].steps[11].nudge = 40
+restart = true
+trig_log = {}
+pump(16)
+local got = {}
+for _, e in ipairs(trig_log) do if e.t == 1 then got[#got + 1] = e.beat end end
+assert(math.abs(got[2] - (1.5 - 0.0625)) <= TOL, "early nudge: " .. tostring(got[2]))
+assert(math.abs(got[3] - (2.5 + 0.1)) <= TOL, "late nudge: " .. tostring(got[3]))
+St.tracks[1].steps[7].nudge = 0
+St.tracks[1].steps[11].nudge = 0
+
+params:set("clock_source", 1)
 pump(64)
 assert((calls.trig or 0) > 0, "no voices fired in four bars")
 print("trigs in 4 bars: " .. calls.trig)
@@ -244,14 +437,90 @@ release(2, 1)
 st = St.tracks[1].steps[2]
 assert(st.cond == 2 and st.pulses == 4 and st.pmode == 2, "step props not edited")
 
--- shift + step sets length, shift + track mutes, shift + control latches
-press(14, 8) tap(8, 2) tap(6, 8) tap(4, 6) release(14, 8)
+-- shift + step sets length, shift + track previews, shift + control latches
+local trigs0 = calls.trig or 0
+press(14, 8) frame() tap(8, 2) tap(6, 8) tap(4, 6) release(14, 8)
 assert(St.tracks[1].len == 24, "length not set")
-assert(St.tracks[2].mute, "mute not toggled")
+assert(not St.tracks[2].mute and St.sel == 1, "shift + track should only preview")
+assert((calls.trig or 0) > trigs0, "shift + track did not preview")
 assert(G.latched == "S1", "latch not set")
 frame()
 press(14, 8) tap(4, 6) release(14, 8)
 assert(G.latched == nil, "latch not cleared")
+
+-- the clip launcher (the COLOUR page's grid), stopped: launches are immediate
+tap(2, 8)
+local C = dd.clips
+local tr1 = St.tracks[1]
+local before = tr1.steps
+local function clips() tap(16, 8) end
+clips()
+assert(St.page == "colour", "COLOUR did not open the launcher")
+frame() redraw()
+tap(5, 3)                                   -- track 1, slot 3: empty
+assert(tr1.clip == 3 and next(tr1.steps) == nil and tr1.len == 16, "empty slot not launched")
+clips()
+assert(St.page == "main", "COLOUR did not close")
+tap(1, 1) tap(5, 1)                          -- write into clip 3
+clips() tap(5, 1)                            -- back to slot 1
+assert(tr1.clip == 1 and tr1.steps == before and tr1.len == 24, "slot 1 not restored")
+assert(C.has(1, 3) and not C.has(1, 4), "slot contents wrong")
+-- hold slot 3, tap track 2 slot 2: a copy, and no launch
+press(5, 3) tap(6, 2) release(5, 3)
+assert(tr1.clip == 1 and C.has(2, 2) and St.tracks[2].clip == 1, "copy went wrong")
+St.tracks[2].clips[2].steps[1].vel = 5
+assert(tr1.clips[3].steps[1].vel ~= 5, "copy shares tables")
+-- shift + stop + slot empties it and is not a fill
+press(14, 8) press(2, 8) tap(6, 2) release(2, 8) release(14, 8)
+assert(not C.has(2, 2) and not St.fill, "slot not emptied")
+-- the pager and BYPASS on row 7 are not slots
+local cs0 = St.col_sel
+tap(1, 7) tap(2, 7)
+assert(St.col_sel == dd.spec.BANK_CELLS[dd.spec.COLOUR[cs0].bank][1] and not C.hold, "pager")
+-- rain: E1 while SWING is held, and SWING's screen shows it
+press(3, 8) enc(1, 10) frame() redraw() release(3, 8)
+assert(math.abs(params:get("rain") - 0.1) < 1e-6, "rain not turned")
+params:set("rain", 0)
+clips()
+assert(St.page == "main")
+
+-- playing, a launch waits for the bar and starts the clip from its top
+tap(1, 8)
+pump(6)
+clips() tap(5, 3)
+assert(tr1.clip == 1 and tr1.next_clip and tr1.next_clip.beat == 4, "launch not quantised to the bar")
+pump(9)
+assert(tr1.clip == 1, "launched before the bar")
+trig_log = {}
+pump(4)
+assert(tr1.clip == 3 and tr1.next_clip == nil, "launch did not land")
+local hit4 = false
+for _, e in ipairs(trig_log) do
+  if e.t == 1 and math.abs(e.beat - 4) <= TOL then hit4 = true end
+end
+assert(hit4, "the new clip's step 1 did not play on the bar")
+-- a launch still waiting is dropped by STOP
+tap(5, 1)
+tap(2, 8)
+assert(tr1.next_clip == nil and tr1.clip == 3, "stop kept a waiting launch")
+tap(5, 1)
+assert(tr1.clip == 1)
+-- plain SWING on COLOUR is still the swing screen
+press(3, 8) assert(G.overlay() == "swing") release(3, 8)
+
+-- rain falls only between hits, on the grid, and only while it rains
+params:set("rain", 1)
+tap(1, 8)
+trig_log = {}
+pump(64)
+local rained = #trig_log
+ok, e = all_on_grid(0.25)
+assert(ok, e and ("rain off the grid at beat " .. e.beat))
+params:set("rain", 0)
+assert(rained > 40, "a downpour produced only " .. rained .. " hits")
+assert(#C.drops > 0, "rain drew nothing")
+frame() clips()
+assert(St.page == "main")
 
 -- LFO patching
 press(14, 6)
@@ -273,18 +542,79 @@ pump(32)
 -- mix page
 tap(15, 8)
 assert(St.page == "mix")
-tap(6, 3) tap(2, 1) tap(15, 4)
+tap(6, 3)
+-- track buttons mute here
+tap(6, 8)
+assert(St.tracks[2].mute, "mix: track button did not mute")
+tap(6, 8)
+assert(not St.tracks[2].mute, "mix: track button did not unmute")
+-- pan: nudge left twice, centre, nudge track 8 right
+tap(1, 1) tap(1, 1)
+assert(math.abs(params:get("t1_pan") + 0.2) < 1e-6, "pan nudge: " .. params:get("t1_pan"))
+tap(2, 1)
+assert(params:get("t1_pan") == 0, "pan centre")
+for _ = 1, 15 do tap(16, 4) end
+assert(math.abs(params:get("t8_pan") - 1) < 1e-6, "pan clamps at hard right")
+tap(16, 1)
+assert(math.abs(params:get("t5_pan") - 0.1) < 1e-6, "pan right nudge")
 enc(1, 1) enc(2, 3) enc(3, -2)
 for i = 1, 8 do St.meter[i] = i / 10 end
 frame()
 tap(15, 8)
 
--- colour page
+-- colour page: the screen is the master COLOUR, the grid the launcher
+local SP = dd.spec
+local function bank() return SP.COLOUR[St.col_sel].bank end
 tap(16, 8)
 assert(St.page == "colour")
-for i = 1, 6 do tap(8, i) end
+for _ = 1, #SP.COLOUR do enc(1, 1) enc(2, 2) enc(3, 1) end
+assert(St.col_sel == #SP.COLOUR)
+frame()
+-- row 7: column 2 forward a bank, column 1 back, round at the ends
+St.col_sel = 1
+tap(2, 7)
+assert(bank() == 2 and St.col_sel == SP.BANK_CELLS[2][1], "pager forward")
+tap(1, 7) tap(1, 7)
+assert(bank() == #SP.COLOUR_BANKS, "pager back from BUSS goes round to SPACE")
+tap(2, 7)
+assert(bank() == 1, "pager forward from SPACE goes round to BUSS")
+-- BYPASS on row 7 column 16
+local byp = params:get("col_bypass")
 tap(16, 7)
-for _ = 1, 6 do enc(1, 1) enc(2, 2) enc(3, 1) end
+assert(params:get("col_bypass") ~= byp, "bypass")
+tap(16, 7)
+-- DUCK
+tap(2, 7)
+params:set("col_scsrc", 2)
+assert(last.duck[1] == "scsrc" and last.duck[2] == 1, "duck source sent as track 1")
+St.col_sel = SP.BANK_CELLS[2][2]
+enc(2, 1)
+assert(last.duck[1] == "screl")
+St.hit(1, 1, 0, 1, 0)   -- the source's hit pulls the field down
+frame()
+params:set("col_scsrc", 1)
+assert(last.duck[2] == 0, "duck off")
+-- SPACE: its cells go to the fx, the last one is the returns
+tap(2, 7) tap(2, 7)
+assert(bank() == 4)
+for _, i in ipairs(SP.BANK_CELLS[4]) do St.col_sel = i enc(2, 3) end
+assert(calls.fx and calls.fx > 0)
+assert(last.fx[1] == "dret", "SPACE's last cell is the returns")
+-- TEXTURE goes to the colour stage
+tap(1, 7)
+local tex = SP.BANK_CELLS[3]
+St.col_sel = tex[1] enc(2, 1)
+assert(last.colour[1] == "loss")
+frame()
+-- the chorus: cells 4 and 5 of TEXTURE, and its twin lines on the field
+St.col_sel = tex[4] enc(2, 100)
+assert(last.colour[1] == "chorus" and last.colour[2] > 0.7, "chorus cell")
+St.col_sel = tex[5] enc(2, 1)
+assert(last.colour[1] == "chdepth")
+for _ = 1, 10 do dd.ui.vis_update(1 / 30) frame() end
+params:set("clock_tempo", 90)
+St.follow_tempo()
+St.col_sel = 1
 St.outamp = 0.4
 for _ = 1, 30 do
   dd.ui.vis_update(1 / 30)
@@ -293,17 +623,444 @@ for _ = 1, 30 do
 end
 tap(16, 8)
 
+-- snapshots: SHIFT + PLAY opens the page
+local N = dd.snap
+press(14, 8) tap(1, 8) release(14, 8)
+assert(St.page == "snap", "shift + play did not open SNAP")
+assert(St.playing, "shift + play should not touch transport")
+-- a short shift-hold saves nothing, a full one saves
+press(14, 8) press(4, 1) pump(1) release(4, 1) release(14, 8)
+assert(not N.has(4), "short hold saved")
+press(14, 8) press(3, 1)
+for _ = 1, 8 do pump(1) G.redraw() redraw() end
+release(3, 1) release(14, 8)
+assert(N.has(3), "hold did not save")
+frame()
+-- change things, then load while playing: lands on a beat
+local saved_steps, saved_level = 0, params:get("t1_level")
+for _ in pairs(St.tracks[1].steps) do saved_steps = saved_steps + 1 end
+St.tracks[1].steps = {}
+params:set("t1_level", 0.1)
+St.tracks[4].speed = 6   -- a 1/4 track needs a whole beat's notice
+local tapped_at = clock.get_beats()
+tap(3, 1)
+local p = N.pending
+assert(p and p.beat == math.floor(p.beat) and p.beat - tapped_at > 1, "load not aimed at a beat")
+local applied_at
+local orig_set = params.set
+params.set = function(self, id, v)
+  if id == "t1_level" and not applied_at then applied_at = clock.get_beats() end
+  return orig_set(self, id, v)
+end
+pump(16)
+params.set = orig_set
+assert(N.pending == nil and N.last == 3, "load never landed")
+assert(applied_at and math.abs(applied_at - (p.beat - 1 / 64)) < 0.01,
+  "sound not loaded just before the beat: " .. tostring(applied_at) .. " vs " .. p.beat)
+local n_steps = 0
+for _ in pairs(St.tracks[1].steps) do n_steps = n_steps + 1 end
+assert(n_steps == saved_steps and math.abs(params:get("t1_level") - saved_level) < 1e-6,
+  "snapshot not restored")
+assert(St.tracks[4].speed ~= 6, "track speed not restored")
+-- the restored steps are a copy: editing them does not edit the snapshot
+St.tracks[1].steps[60] = S.new_step()
+assert(N.slots[3].tracks[1].steps[60] == nil, "snapshot shares tables with the live pattern")
+-- stopped, a load is immediate
+tap(2, 8)
+St.tracks[1].steps = {}
+tap(3, 1)
+assert(next(St.tracks[1].steps) ~= nil and N.pending == nil, "stopped load not immediate")
+frame()
+-- every param a snapshot carries, ANALOG included
+params:set("analog", 0.9)
+tap(3, 1)
+assert(math.abs(params:get("analog") - 0.5) < 1e-6, "snapshot does not carry analog")
+-- a blank cell is the INIT patch: no steps, defaults back
+St.select(5)
+params:set("t1_level", 0.2)
+assert(not N.has(9))
+tap(9, 1)
+for t = 1, S.NTRACKS do
+  assert(next(St.tracks[t].steps) == nil, "init patch left steps on track " .. t)
+end
+assert(math.abs(params:get("t1_level") - 0.8) < 1e-6 and St.sel == 1, "init patch not default")
+-- SHIFT alone flashes the last step on MAIN
+press(14, 8) tap(1, 8) release(14, 8)
+press(14, 8) frame() release(14, 8)
+press(14, 8) tap(1, 8) release(14, 8)
+-- SHIFT + STOP + hold deletes; a short hold does not, nor does it leave FILL on
+local fill0 = St.fill
+press(14, 8) press(2, 8) press(3, 1) pump(1) release(3, 1) release(2, 8) release(14, 8)
+assert(N.has(3), "short delete hold deleted")
+assert(St.fill == fill0, "delete chord toggled FILL")
+press(14, 8) press(2, 8) press(3, 1)
+for _ = 1, 8 do pump(1) G.redraw() redraw() end
+release(3, 1) release(2, 8) release(14, 8)
+assert(not N.has(3), "hold did not delete")
+-- SHIFT + STOP alone on SNAP is still FILL while held
+press(14, 8) press(2, 8)
+assert(St.fill, "shift + stop on SNAP did not fill")
+release(2, 8) release(14, 8)
+assert(not St.fill, "fill outlived STOP")
+frame()
+-- KITS: tap one for every track; hold one and press tracks for only those
+tap(2, 7)
+for t = 1, S.NTRACKS do assert(S.kit_of(t) == 2, "kit tap missed track " .. t) end
+assert(last.kit[1] == 7 and last.kit[2] == 1, "engine not told the kit")
+press(3, 7) frame() tap(5, 8) tap(11, 8) release(3, 7)
+assert(S.kit_of(1) == 3 and S.kit_of(7) == 3 and S.kit_of(2) == 2, "hold + track did not pick tracks")
+-- each kit has its own T params, and a hit sends the playing kit's
+assert(St.pid(1, "T2a") == "t1_k3_T2a" and St.pid(2, "T2a") == "t2_k2_T2a")
+params:set("t1_k3_T1a", 80)
+St.audition(1)
+assert(last.set and calls.trig, "no hit")
+assert(math.abs(params:get("t1_T1a") - S.VOICES[1].tone.T1.a.def) < 1e-6, "FM pitch moved WARM's")
+-- a snapshot carries the kits; INIT puts every track back on WARM
+press(14, 8) press(5, 1)
+for _ = 1, 8 do pump(1) end
+release(5, 1) release(14, 8)
+tap(2, 7)
+tap(5, 1)
+assert(S.kit_of(1) == 3 and S.kit_of(2) == 2 and math.abs(params:get("t1_k3_T1a") - 80) < 1e-6,
+  "snapshot did not restore kits")
+tap(10, 1)
+for t = 1, S.NTRACKS do assert(S.kit_of(t) == 1, "init left track " .. t .. " off WARM") end
+press(1, 7) release(1, 7)
+frame()
+press(14, 8) tap(1, 8) release(14, 8)
+assert(St.page == "main")
+tap(1, 8)
+pump(4)
+
+-- FILL is momentary: on with SHIFT + STOP, off with STOP, whatever SHIFT does
+assert(St.page == "main" and St.playing)
+press(14, 8) press(2, 8)
+assert(St.fill and St.playing, "shift + stop should fill, not stop")
+release(14, 8)
+assert(St.fill, "fill should last as long as STOP")
+frame()
+release(2, 8)
+assert(not St.fill and St.playing, "fill not released with STOP")
+
+-- K2 and K3 act on release; together they reset and do nothing else
+key(2, 1) key(2, 0)
+assert(not St.playing, "K2 did not stop")
+key(2, 1) key(2, 0)
+assert(St.playing, "K2 did not play")
+tap(15, 8)
+params:set("t1_pan", 0.6)
+params:set("t1_tilt", -0.4)
+St.select(1)
+key(2, 1) key(3, 1) key(2, 0) key(3, 0)
+assert(params:get("t1_pan") == 0 and params:get("t1_tilt") == 0, "K2+K3 did not reset pan/tilt")
+assert(St.playing and St.page == "mix", "K2+K3 also did K2's or K3's job")
+tap(15, 8)
+-- on a control: the track's values, or the held steps' locks
+params:set("t1_T2a", 3.5)
+press(2, 6) key(3, 1) key(2, 1) key(3, 0) key(2, 0) release(2, 6)
+assert(math.abs(params:get("t1_T2a") - S.VOICES[1].tone.T2.a.def) < 1e-6, "K2+K3 did not reset T2")
+press(5, 1) press(1, 6) enc(3, 4) release(1, 6)
+assert(St.tracks[1].steps[5].locks.T1b, "lock for the reset test")
+press(1, 6) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(1, 6) release(5, 1)
+assert(St.tracks[1].steps[5] and not St.tracks[1].steps[5].locks, "K2+K3 did not clear locks")
+-- TC over the template
+St.tracks[1].tpl.prob = 40
+press(9, 6) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(9, 6)
+assert(St.tracks[1].tpl.prob == 100, "K2+K3 did not reset the template")
+-- swing, an LFO, a COLOUR cell, the main page's speed
+press(3, 8) enc(2, 5) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(3, 8)
+assert(params:get("swing") == 50, "K2+K3 did not reset swing")
+press(14, 6) enc(2, 5) enc(3, 5) key(2, 1) key(3, 1) key(2, 0) key(3, 0) release(14, 6)
+assert(math.abs(params:get("t1_l1_rate") - 0.5) < 1e-6 and math.abs(params:get("t1_l1_depth") - 0.4) < 1e-6,
+  "K2+K3 did not reset the LFO")
+tap(16, 8)
+St.col_sel = 1
+enc(2, 20) enc(3, 1)
+key(2, 1) key(3, 1) key(2, 0) key(3, 0)
+assert(params:get("col_drive") == 0 and params:get("col_drivetype") == 1, "K2+K3 did not reset the cell")
+tap(16, 8)
+St.tracks[1].speed = 6
+key(2, 1) key(3, 1) key(2, 0) key(3, 0)
+assert(St.tracks[1].speed == 3 and St.playing, "K2+K3 on main")
+
+-- PERFORM: SHIFT + MIX
+local F = dd.perform
+press(14, 8) tap(15, 8) release(14, 8)
+assert(St.page == "perform", "shift + mix did not open PERFORM")
+-- REPEAT: a pad punches, a second takes over, letting it go hands back
+press(1, 1)
+assert(last.punch[1] == 0 and last.punch[2] == "loop", "repeat did not punch")
+local L1 = last.punch[4]
+press(5, 1)
+assert(last.punch[4] < L1, "second repeat pad did not take over")
+release(5, 1)
+assert(math.abs(last.punch[4] - L1) < 1e-9, "letting go did not hand back to the held pad")
+frame()
+release(1, 1)
+assert(last.unpunch[1] == 0, "repeat not let go")
+-- a filter is moved, not restarted, while held
+local np = calls.punch
+press(1, 2) press(6, 2)
+assert(calls.punch == np + 1 and last.punchSet[1] == 5, "lowpass should glide, not re-punch")
+release(6, 2) release(1, 2)
+assert(last.unpunch[1] == 5)
+-- GATE keeps its bar phase when its chop changes
+press(9, 1)
+local c0 = last.punch[5]
+pump(3)
+press(12, 1)
+assert(last.punchSet[4] == c0, "gate lost its phase")
+release(12, 1) release(9, 1)
+-- every pad of every strip punches and lets go
+for f = 1, #F.STRIPS do
+  for i = 1, 8 do
+    local x, y = F.pad_xy(f, i)
+    press(x, y) frame() release(x, y)
+    assert(F.active[f] == nil, "strip " .. f .. " pad " .. i .. " stuck")
+  end
+end
+-- DROP latched with SHIFT, through a page change, cleared by K2+K3
+press(14, 8) tap(9, 4) release(14, 8)
+assert(St.pmute[1] and St.pmute[2] and not St.pmute[3], "DROP did not take the kicks out")
+assert(last.strip[2] == "pmute", "DROP not sent")
+press(14, 8) tap(16, 3) release(14, 8)   -- CRUSH latched too
+press(13, 1)                              -- a held GATE
+tap(15, 8) tap(15, 8)                     -- off to MIX and back to MAIN
+assert(F.active[2] == nil, "a held pad outlived the page")
+assert(F.active[8] and F.active[6], "latches did not survive the page")
+press(14, 8) tap(15, 8) release(14, 8)
+frame()
+key(2, 1) key(3, 1) key(2, 0) key(3, 0)
+assert(not St.pmute[1] and F.active[8] == nil and F.active[6] == nil, "K2+K3 did not clear PERFORM")
+press(14, 8) tap(15, 8) release(14, 8)
+assert(St.page == "main")
+
+-- the hidden TAPE: SHIFT + COLOUR, held
+press(14, 8) press(16, 8)
+assert(St.page == "main", "SHIFT + COLOUR should not change page")
+assert(G.overlay() == "tape" and last.punch[1] == 2, "tape did not start")
+release(14, 8)
+enc(2, -3) enc(3, -1)
+assert(params:get("tape_pitch") == -15 and params:get("tape_len") == 4, "tape encoders")
+assert(last.punchSet[1] == 2 and math.abs(last.punchSet[5] - 2 ^ (-15 / 12)) < 1e-9, "tape pitch not sent")
+key(2, 1) key(2, 0)
+assert(St.playing, "K2 under the TAPE should be quiet")
+frame()
+key(2, 1) key(3, 1) key(2, 0) key(3, 0)
+assert(params:get("tape_pitch") == -12 and params:get("tape_len") == 5, "K2+K3 did not reset the tape")
+release(16, 8)
+assert(last.unpunch[1] == 2 and G.overlay() == nil and St.page == "main", "tape not let go")
+
+-- A:B conditions fire on the A-th of every B passes, and only then
+do
+  local Qs = dd.seq
+  local want = {
+    ["1:2"] = { true, false, true, false }, ["2:2"] = { false, true, false, true },
+    ["1:3"] = { true, false, false, true }, ["3:3"] = { false, false, true, false },
+    ["2:4"] = { false, true, false, false }, ["4:4"] = { false, false, false, true },
+  }
+  for ci, name in ipairs(S.CONDS) do
+    local w = want[name]
+    if w then
+      for loop = 0, 3 do
+        local tr = { loop = loop, pre = false }
+        local got = Qs.cond(tr, 1, { cond = ci, prob = 100 })
+        assert(got == w[loop + 1], name .. " on pass " .. (loop + 1) .. " gave " .. tostring(got))
+      end
+    end
+  end
+end
+
+-- directions, straight off the sequencer's advance
+do
+  local Q = dd.seq
+  local function walk(dir, len, n)
+    local tr = { pos = 0, pulse = 1, npulses = 1, loop = 0, len = len, dir = dir,
+      steps = {}, pdir = 1, count = 0, dw = 0 }
+    local out = {}
+    for k = 1, n do Q.advance(tr) out[k] = tr.pos end
+    return table.concat(out, ","), tr.loop
+  end
+  local o, l = walk(1, 4, 9)
+  assert(o == "1,2,3,4,1,2,3,4,1" and l == 2, "FWD: " .. o .. " loop " .. l)
+  o, l = walk(2, 4, 9)
+  assert(o == "4,3,2,1,4,3,2,1,4" and l == 2, "BWD: " .. o .. " loop " .. l)
+  o, l = walk(3, 4, 10)
+  assert(o == "1,2,3,4,3,2,1,2,3,4" and l == 1, "PEND: " .. o .. " loop " .. l)
+  o = walk(3, 1, 3)
+  assert(o == "1,1,1", "PEND of one: " .. o)
+  for _, d in ipairs({ 4, 5 }) do
+    local seq, lp = walk(d, 8, 64)
+    for v in seq:gmatch("%d+") do
+      local x = tonumber(v)
+      assert(x >= 1 and x <= 8, S.DIRS[d] .. " left the pattern: " .. x)
+    end
+    assert(lp == 7, S.DIRS[d] .. " counts passes wrong: " .. lp)
+  end
+end
+
+-- MAIN: E1 picks the pair, E2/E3 turn it, K2+K3 resets it; E1 leaves the track
+tap(1, 8)
+local sel0 = St.sel
+enc(1, -5)
+assert(St.main_pair == 1 and St.sel == sel0, "E1 on MAIN moved the track")
+local trm = St.track()
+enc(2, 3) assert(trm.len == 19, "E2 did not set length")
+enc(3, 2) assert(trm.speed == 5, "E3 did not set timing")
+key(2, 1) key(3, 1) key(2, 0) key(3, 0)
+assert(trm.len == 16 and trm.speed == 3, "K2+K3 did not reset length/timing")
+enc(1, 1)
+enc(2, 2) enc(3, 30) redraw()
+assert(trm.dir == 3 and trm.dilla == 30, "pair 2 not turned")
+-- DILLA moves hits off the grid, never further than S.DILLA_MAX of a pulse
+params:set("swing", 50)
+for i = 1, 16 do trm.steps[i] = S.new_step() end
+trm.mute = false
+if not St.playing then tap(1, 8) end
+assert(St.playing)
+local function dillaed()
+  trig_log = {}
+  pump(64)
+  local off, worst, n = false, 0, 0
+  for _, e in ipairs(trig_log) do
+    if e.t == St.sel then
+      n = n + 1
+      local o = off_grid(e.beat, 0.25)
+      if o > TOL then off = true end
+      worst = math.max(worst, o)
+    end
+  end
+  assert(n > 4, "the DILLA track hardly played")
+  return off, worst
+end
+local d0 = trm.dilla
+trm.dilla = 0
+assert(not dillaed(), "hits off the grid with no DILLA")
+trm.dilla = d0
+local off, worst = dillaed()
+assert(off, "DILLA did not move anything")
+assert(worst <= (0.25 * S.DILLA_MAX * 0.3) + TOL, "DILLA went too far: " .. worst)
+key(2, 1) key(3, 1) key(2, 0) key(3, 0)
+assert(trm.dir == 1 and trm.dilla == 0, "K2+K3 did not reset direction/DILLA")
+-- the character, not just the size: at 100 % the hats' off-beats sit near
+-- the triplet and the snare lays back behind the beat
+do
+  local hat, snr = St.tracks[7], St.tracks[4]
+  local saved = { hat.steps, snr.steps, hat.mute, snr.mute, hat.speed, snr.speed, hat.len, snr.len }
+  hat.steps, snr.steps = {}, {}
+  for i = 1, 16 do hat.steps[i] = S.new_step() snr.steps[i] = S.new_step() end
+  hat.mute, snr.mute, hat.speed, snr.speed, hat.len, snr.len = false, false, 3, 3, 16, 16
+  hat.dilla, snr.dilla = 100, 100
+  trig_log = {}
+  pump(64)
+  local function mean(t, odd)
+    local sum, n = 0, 0
+    for _, e in ipairs(trig_log) do
+      if e.t == t then
+        local line = math.floor((e.beat / 0.25) + 0.5)
+        local o = (e.beat - (line * 0.25)) / 0.25
+        -- an off-beat dragged late rounds onto its own line; keep it there
+        if o < -0.5 then o = o + 1 line = line - 1 end
+        if (line % 2 == 1) == odd then sum, n = sum + o, n + 1 end
+      end
+    end
+    return (n > 0) and (sum / n) or 0
+  end
+  local h_off, h_on = mean(7, true), mean(7, false)
+  assert(math.abs(h_off - (1 / 3)) < 0.08, "hat off-beats not near the triplet: " .. h_off)
+  assert(math.abs(h_on) < 0.06, "hat on-beats strayed: " .. h_on)
+  assert(mean(4, false) > 0.07, "snare not laid back: " .. mean(4, false))
+  hat.dilla, snr.dilla = 0, 0
+  hat.steps, snr.steps, hat.mute, snr.mute, hat.speed, snr.speed, hat.len, snr.len = table.unpack(saved)
+end
+enc(1, -1)
+
 -- sample walk
 press(4, 6) enc(2, 1) release(4, 6)
 pump(4)
 
--- stop, stop again resets
-tap(2, 8) tap(2, 8)
+-- sampler: hold S1, tap a step to arm, the REC panel, a take landing
+do
+  local R = dd.sampler
+  local t = St.sel
+  local before = calls.sampListen or 0
+  local had = St.tracks[t].steps[16]
+  press(4, 6)
+  frame()                       -- the length picker
+  tap(16, 1)
+  assert(R.t == t and R.steps == 16, "S1 + step did not arm")
+  assert(St.tracks[t].steps[16] == had, "S1 + step touched the step")
+  assert((calls.sampListen or 0) == before + 1, "THRESH did not listen")
+  assert(math.abs(last.sampListen[1] - (16 * 0.25 * BS)) < 1e-6, "wrong take length")
+  release(4, 6)
+  assert(G.overlay() == "rec", "no REC panel")
+  frame()
+  -- PLAY while playing: on the next bar
+  enc(1, 1)
+  assert(R.MODES[params:get("rec_mode")] == "PLAY")
+  assert(R.status() == "NEXT BAR", R.status())
+  local starts = calls.sampStart or 0
+  pump(20)
+  assert((calls.sampStart or 0) == starts + 1, "PLAY never started the take")
+  -- the engine's side, by hand
+  R.on_done(0)
+  R.on_state(3) R.prog = 0.5
+  frame()
+  R.on_state(4) frame()
+  R.on_state(0)
+  params:set(St.pid(t, "S1b"), 0)
+  R.on_done(1)
+  assert(R.take == nil, "take still pending")
+  assert(params:get(St.pid(t, "file")):match("drumdrum/rec/.+%.wav$"), "take not loaded")
+  assert(params:get(St.pid(t, "S1b")) == 1, "first take did not raise the level")
+  assert(not R.active() and G.overlay() == nil)
+  -- the same step twice disarms; K2 cancels; K3 starts now
+  press(4, 6) tap(3, 2) tap(3, 2) release(4, 6)
+  assert(not R.active(), "second tap did not disarm")
+  press(4, 6) tap(3, 2) release(4, 6)
+  key(2, 1) key(2, 0)
+  assert(not R.active() and St.playing, "K2 should cancel, not stop")
+  enc(1, -1)
+  press(4, 6) tap(3, 2) release(4, 6)
+  starts = calls.sampStart or 0
+  key(3, 1) key(3, 0)
+  assert((calls.sampStart or 0) == starts + 1 and St.page == "main", "K3 should start now")
+  R.cancel()
+  for _ = 1, 3 do enc(3, 1) frame() end
+  params:set("rec_src", #R.SRCS) frame()
+end
+
+-- stop resets
+assert(St.playing)
+tap(2, 8)
 assert(not St.playing and St.tracks[1].pos == 0)
 
 -- persistence round trip
 local d = St.serialize()
 St.deserialize(d)
+
+-- every kit's voice names and descriptions, every pair, every colour cell
+-- and every control overlay, so the overlap check sees all the strings
+local page0, sel0, pair0, col0 = St.page, St.sel, St.main_pair, St.col_sel
+for kit = 1, #S.KITS do
+  for t = 1, 8 do params:set("t" .. t .. "_kit", kit) end
+  for t = 1, 8 do
+    St.sel = t
+    for _, pg in ipairs({ "main", "mix" }) do
+      St.page = pg
+      for mp = 1, #S.MAIN_PAIRS do St.main_pair = mp frame() end
+    end
+    St.page = "main"
+    for _, b in pairs(S.BTN) do press(b.x, b.y) frame() release(b.x, b.y) end
+  end
+end
+for t = 1, 8 do params:set("t" .. t .. "_kit", 1) end
+St.page = "colour"
+for i = 1, #S.COLOUR do St.col_sel = i frame() end
+St.page, St.sel, St.main_pair, St.col_sel = page0, sel0, pair0, col0
+
+for _, k in ipairs(overlaps) do print("OVERLAP " .. k) end
+assert(#overlaps == 0, #overlaps .. " overlapping strings on screen")
 
 cleanup()
 print(string.format("ok  draws=%d leds=%d set=%d trig=%d strip=%d",

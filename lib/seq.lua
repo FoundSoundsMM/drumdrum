@@ -3,11 +3,11 @@
 -- Eight independent sequencers, one clock coroutine each.
 --
 -- THE SEQUENCER RUNS ONE PULSE AHEAD OF WHAT YOU HEAR. Each coroutine wakes
--- on its own grid line, works out what happens on the NEXT pulse, and
--- schedules it a pulse from now plus swing plus the step's nudge. That is
--- what lets a nudge go early as well as late: an early step is just a
--- shorter wait. The playhead the grid draws is moved by the scheduled event,
--- so it lands when the sound does, not when the sequencer thought about it.
+-- on its own grid line, works out what happens on the NEXT pulse, and places
+-- it on that pulse's line plus swing plus the step's nudge. That is what lets
+-- a nudge go early as well as late. The playhead the grid draws is moved by
+-- the placed event, so it lands when the sound does, not when the sequencer
+-- thought about it. How the placing stays tight is under "run" below.
 --
 -- PULSES, after the Metropolix. A step owns 1-8 pulses of the track's clock,
 -- so a step with four pulses holds the playhead for four steps' worth of
@@ -21,6 +21,29 @@
 --   SCATTER  the first pulse always, each one after it on a coin toss
 --
 -- RAMP shapes the velocity across those hits and BEND walks their pitch.
+--
+-- DIRECTION is the order the track walks its steps in:
+--
+--   FWD   1 to LENGTH, round again
+--   BWD   LENGTH to 1
+--   PEND  there and back, without playing either end twice
+--   WALK  a drunk's walk: a step on, a step back, or stay put, wrapping
+--   RND   any step, at random
+--
+-- One pass of the pattern (what A:B and 1ST count) is a lap for FWD and BWD,
+-- there-and-back for PEND, and LENGTH steps for WALK and RND.
+--
+-- DILLA is the feel of a beat played in by hand on an MPC with the quantise
+-- off, the J Dilla way. Not random shake: each voice has its own place
+-- against the beat (S.DILLA). The kicks push a hair early, the claps and
+-- snares lay back late, and every off-beat (the second of each pair of
+-- pulses) is dragged part of the way to where a triplet would put it -- the
+-- hats almost all the way, the kicks only a little -- so the groove sits
+-- somewhere between straight and swung, and the voices rub against each
+-- other instead of locking. On top, a slow wander (a random walk pulled back
+-- towards the lean, so a track drifts early or late for a bar or two the way
+-- a player does) and a touch of hit-to-hit jitter. All of it grows with the
+-- amount: low is a gentle loosening, 100 % is properly drunk.
 
 local S = include("drumdrum/lib/spec")
 
@@ -53,7 +76,8 @@ function Q.cond(tr, t, st)
   else
     local a, b = c:match("^(%d):(%d)$")
     a, b = tonumber(a), tonumber(b)
-    res = (a and b) and ((tr.loop % b) == (a - 1)) or true
+    -- not `x and (cmp) or true`: a false comparison would fall through to true
+    if a and b then res = ((tr.loop % b) == (a - 1)) else res = true end
   end
   if res and (st.prob or 100) < 100 then
     res = math.random(100) <= st.prob
@@ -66,19 +90,77 @@ end
 
 -- -------------------------------------------------------------------- step
 
+-- the next step for the track's direction
+local function next_pos(tr)
+  local len = tr.len
+  local d = S.DIRS[tr.dir or 1] or "FWD"
+  local pos = tr.pos
+  if pos > len then pos = len end
+  if d == "BWD" then
+    if pos <= 1 then
+      if tr.pos ~= 0 then tr.loop = tr.loop + 1 end
+      return len
+    end
+    return pos - 1
+  elseif d == "PEND" then
+    if pos == 0 then tr.pdir = 1 return 1 end
+    if len <= 1 then tr.loop = tr.loop + 1 return 1 end
+    local n = pos + tr.pdir
+    if n > len then tr.pdir = -1 n = len - 1 end
+    if n < 1 then
+      tr.pdir = 1
+      n = 2
+    end
+    -- back at the start: a pass is there and back
+    if n == 1 then tr.loop = tr.loop + 1 end
+    return n
+  elseif d == "WALK" or d == "RND" then
+    local n
+    if pos == 0 then n = (d == "RND") and math.random(len) or 1
+    elseif d == "RND" then n = math.random(len)
+    else
+      local r = math.random()
+      n = pos + ((r < 0.5) and 1 or ((r < 0.75) and -1 or 0))
+      if n > len then n = 1 elseif n < 1 then n = len end
+    end
+    if pos ~= 0 then
+      tr.count = tr.count + 1
+      if tr.count >= len then
+        tr.count = 0
+        tr.loop = tr.loop + 1
+      end
+    end
+    return n
+  end
+  if pos + 1 > len then
+    if tr.pos ~= 0 then tr.loop = tr.loop + 1 end
+    return 1
+  end
+  return pos + 1
+end
+
 function Q.advance(tr)
   if tr.pulse < tr.npulses then
     tr.pulse = tr.pulse + 1
     return
   end
   tr.pulse = 1
-  tr.pos = tr.pos + 1
-  if tr.pos > tr.len then
-    tr.pos = 1
-    tr.loop = tr.loop + 1
-  end
+  tr.pos = next_pos(tr)
   local st = tr.steps[tr.pos]
   tr.npulses = (st and st.on) and (st.pulses or 1) or 1
+end
+
+-- this hit's DILLA, in pulses, for a pulse on line b of a grid of div
+local function dilla(t, tr, b, div)
+  local amt = (tr.dilla or 0) / 100
+  if amt <= 0 then return 0 end
+  local D = S.DILLA
+  local off = (math.floor((b / div) + 1e-6) % 2) == 1
+  tr.dw = util.clamp((tr.dw * 0.92) + ((math.random() - 0.5) * 0.5), -1, 1)
+  local jit = (math.random() - 0.5) * 2
+  local o = D.LEAN[t] + (D.WANDER * tr.dw) + (D.JITTER * jit)
+  if off then o = o + (D.SWAY[t] * D.TRIP) end
+  return o * amt
 end
 
 -- what the current pulse plays, or nil
@@ -131,90 +213,232 @@ function Q.swing_delay(beat)
 end
 
 -- ---------------------------------------------------------------------- run
+--
+-- Everything is placed in BEATS on norns' own clock, never in seconds counted
+-- from whenever the lua happened to run. Under MIDI or Link the beat is the
+-- other machine's beat, so a pulse placed on a beat lands where the DAW put
+-- its own, and a late coroutine does not drag the pattern late with it.
+--
+-- Each track coroutine wakes on its grid lines with clock.sync, which norns
+-- counts from the coroutine's previous target rather than from "now": the
+-- lines never drift and never get skipped, however late the lua gets to them.
+-- Waking on line b, it prepares the pulse for the next line. A pulse with no
+-- swing and no nudge is then a clock.sync straight onto its line; only the
+-- part of a pulse that is genuinely off the grid (swing, nudge) is a sleep,
+-- and that sleep is measured from the line, not from when it was planned.
 
-local function fire(t, h)
+local EPS = 1e-6
+
+Q.ids = {}
+Q.gen = 0        -- bumped on every start and stop: anything already scheduled
+                 -- from an older run sees a different number and drops out
+Q.waiter = nil   -- a start that is waiting for its bar line
+
+local function speed(tr) return S.SPEED_BEATS[tr.speed] or 0.25 end
+
+-- the first line of a grid of div strictly after beat b
+local function line_after(b, div)
+  return (math.floor((b / div) + EPS) + 1) * div
+end
+
+-- run fn at beat `at`, as exactly as the clock allows
+local function place(at, div, gen, fn)
+  clock.run(function()
+    -- ride the clock up to the last grid line at or before `at` ...
+    local line = math.floor((at / div) + EPS) * div
+    if line - clock.get_beats() > 0.001 then clock.sync(div) end
+    -- ... and sleep only what is left over, measured from where we really are
+    local rem = at - clock.get_beats()
+    if rem > 0.0005 then clock.sleep(rem * clock.get_beat_sec()) end
+    if gen == Q.gen then fn() end
+  end)
+end
+
+local function fire(t, h, gen)
   St.hit(t, h.vel, h.pitch, h.decm, h.mix, h.locks)
+  if h.rain and Q.on_rain and not St.tracks[t].mute then Q.on_rain(t) end
   if h.flam > 0 then
     clock.run(function()
       clock.sleep(h.flam / 1000)
-      St.hit(t, h.vel * 0.6, h.pitch, h.decm, h.mix, h.locks)
+      if gen == Q.gen then St.hit(t, h.vel * 0.6, h.pitch, h.decm, h.mix, h.locks) end
     end)
   end
 end
 
-function Q.tick(t)
+-- advance track t one pulse and put that pulse on line b
+function Q.tick(t, b, div, gen)
   local tr = St.tracks[t]
-  local div = S.SPEED_BEATS[tr.speed] or 0.25
+  -- a snapshot due on this line swaps the pattern in before it is read
+  if Q.on_tick then Q.on_tick(t, b) end
   Q.advance(tr)
   local pos = tr.pos
   local h = Q.hit_for(tr, t)
+  -- RAIN only falls where the track itself is silent (see lib/clips)
+  if not h and Q.rain then h = Q.rain(t) end
 
-  -- the pulse being scheduled sits one division ahead, snapped to its grid
-  local beat = (math.floor((clock.get_beats() / div) + 0.5) + 1) * div
-  local wait = div + Q.swing_delay(beat)
-  local bs = clock.get_beat_sec()
-
-  local nudge = h and h.nudge or 0
-  if nudge == 0 then
-    clock.run(function()
-      clock.sleep(wait * bs)
-      tr.ph = pos
-      if h then fire(t, h) end
-      St.dirty = true
-    end)
-  else
-    clock.run(function()
-      clock.sleep(wait * bs)
-      tr.ph = pos
-      St.dirty = true
-    end)
-    clock.run(function()
-      clock.sleep(math.max(wait + (nudge * div), 0) * bs)
-      fire(t, h)
-    end)
+  local at = b + Q.swing_delay(b)
+  local nudge = h and ((h.nudge + dilla(t, tr, b, div)) * div) or 0
+  -- the playhead moves with the line, so it lands when the beat does
+  place(at, div, gen, function()
+    tr.ph = pos
+    if h and nudge == 0 then fire(t, h, gen) end
+    St.dirty = true
+  end)
+  if nudge ~= 0 then
+    place(at + nudge, div, gen, function() fire(t, h, gen) end)
   end
 end
 
-local function loop(t)
+-- one track, from line a. The pulse for a is due now; after that the
+-- coroutine stays one line ahead of what you hear, which is the room an
+-- early nudge needs.
+local function loop(t, gen, a)
   local tr = St.tracks[t]
-  clock.sync(S.SPEED_BEATS[tr.speed] or 0.25)
-  while St.playing do
-    Q.tick(t)
-    clock.sync(S.SPEED_BEATS[tr.speed] or 0.25)
+  -- a Link start can arrive a moment before its beat 0
+  if a - clock.get_beats() > 0.001 then clock.sync(speed(tr)) end
+  Q.tick(t, a, speed(tr), gen)
+  local b = a
+  while gen == Q.gen do
+    local div = speed(tr)
+    local nb = line_after(b, div)
+    Q.tick(t, nb, div, gen)
+    clock.sync(div)
+    b = nb
   end
 end
-
-Q.ids = {}
 
 function Q.reset()
   for _, tr in ipairs(St.tracks) do
     tr.pos, tr.pulse, tr.npulses, tr.loop = 0, 1, 1, 0
     tr.pass, tr.pre, tr.ph = false, false, 0
+    tr.pdir, tr.count, tr.dw = 1, 0, 0
   end
   St.dirty = true
 end
 
-function Q.play()
-  if St.playing then return end
-  St.playing = true
-  for t = 1, S.NTRACKS do
-    Q.ids[t] = clock.run(loop, t)
-  end
-  St.dirty = true
-end
-
--- STOP stops where it is; STOP again while stopped goes back to the top
-function Q.stop()
-  if not St.playing then
-    Q.reset()
-    return
-  end
+-- everything stops and goes back to the top; nothing told to anyone else
+function Q.halt()
+  Q.gen = Q.gen + 1
   St.playing = false
   for t = 1, S.NTRACKS do
     if Q.ids[t] then clock.cancel(Q.ids[t]) end
     Q.ids[t] = nil
   end
+  if Q.waiter then clock.cancel(Q.waiter) end
+  Q.waiter = nil
+  Q.reset()
+end
+
+-- all eight tracks from line a together. a is a whole beat, so it sits on
+-- every track's grid whatever its speed.
+function Q.start(a)
+  Q.halt()
+  St.playing = true
+  local gen = Q.gen
+  for t = 1, S.NTRACKS do
+    Q.ids[t] = clock.run(loop, t, gen, a)
+  end
+  -- step 1 is now: a sample take armed for PLAY starts here
+  if Q.on_begin then Q.on_begin(a) end
   St.dirty = true
+end
+
+-- --------------------------------------------------------------- transport
+--
+-- Where START and STOP come from depends on SYSTEM > CLOCK > source:
+--
+--   internal  PLAY restarts norns' clock, so beat 0 is the moment you press
+--             it. The clock answers with a transport start and that is what
+--             actually starts the tracks.
+--   midi      the DAW's START starts us on its first clock tick, which is
+--             its beat 0, and its STOP stops us. PLAY here can not start the
+--             DAW, so it joins on the next bar line of the DAW's count.
+--   link      with "link start/stop sync" on, PLAY and STOP run the whole
+--             Link session and we start with it on its beat 0. With it off
+--             (or the session already running) PLAY joins on the next
+--             quantum line.
+--   crow      no transport at all: PLAY joins on the next bar.
+--
+-- An external clock is not evidence of an external transport -- a DAW that is
+-- already rolling sent its START before we existed -- so PLAY and STOP here
+-- always work, whatever the source.
+
+local INTERNAL, MIDI, LINK = 1, 2, 3
+
+local function source()
+  local ok, v = pcall(function() return params:get("clock_source") end)
+  return ok and v or INTERNAL
+end
+
+local function link_sync()
+  local ok, v = pcall(function() return params:get("link_start_stop_sync") end)
+  return ok and v == 2
+end
+
+function Q.bar()
+  if source() == LINK then
+    local ok, v = pcall(function() return params:get("link_quantum") end)
+    if ok and v and v > 0 then return v end
+  end
+  return 4
+end
+
+-- start on the next bar line of whatever clock is running
+function Q.join()
+  Q.halt()
+  St.playing = true   -- PLAY lights while it waits
+  local gen = Q.gen
+  local n = Q.bar()
+  Q.waiter = clock.run(function()
+    clock.sync(n)
+    if gen ~= Q.gen then return end
+    Q.waiter = nil
+    Q.start(math.floor(clock.get_beats() + 0.5))
+  end)
+  St.dirty = true
+end
+
+-- ask the clock to start, and join on the bar if it never answers
+local function ask(f)
+  Q.halt()
+  St.playing = true
+  local gen = Q.gen
+  if not pcall(f) then return Q.join() end
+  Q.waiter = clock.run(function()
+    clock.sleep(0.25)
+    if gen ~= Q.gen then return end
+    Q.waiter = nil
+    Q.join()
+  end)
+  St.dirty = true
+end
+
+-- clock.transport.start: beat 0 is now (MIDI's first tick after START, the
+-- Link session's start, an internal restart). Already running, this is the
+-- other end going back to the top, and we go with it.
+function Q.on_start()
+  Q.start(math.max(math.floor(clock.get_beats() + 0.5), 0))
+end
+
+function Q.on_stop()
+  if Q.on_halt then Q.on_halt() end
+  Q.halt()
+end
+
+-- PLAY
+function Q.play()
+  if St.playing then return end
+  local src = source()
+  if src == INTERNAL then ask(function() clock.internal.start() end)
+  elseif src == LINK and link_sync() then ask(function() clock.link.start() end)
+  else Q.join() end
+end
+
+-- STOP: stops and goes back to the top
+function Q.stop()
+  if source() == LINK and link_sync() then pcall(function() clock.link.stop() end) end
+  if Q.on_halt then Q.on_halt() end
+  Q.halt()
 end
 
 function Q.toggle()

@@ -127,102 +127,106 @@ end
 
 local function pct(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end
 
-local MATERIAL = function(v)
-  local names = { "SKIN", "WOOD", "BAR", "BELL" }
-  local i = math.min(math.floor(v * 3 + 0.5), 3) + 1
-  return names[i] .. string.format(" %d", math.floor(v * 100 + 0.5))
-end
-
 local FOLD = function(v)
   local n = (v < 0.34) and "CLEAN" or ((v < 0.67) and "METAL" or "DIRTY")
   return n .. " " .. math.floor(v * 100 + 0.5)
 end
 
+-- WARM is voiced after the MFB Tanzbar (see the engine's notes on what its
+-- samples measured). The defaults sit on the middle of those samples.
+local PMODE = function(v)
+  local names = { "CLAVE", "RIM", "COWBL" }
+  local x = v * 2
+  local i = math.floor(x + 0.5)
+  if math.abs(x - i) < 0.12 then return names[i + 1] end
+  local lo = math.floor(x)
+  return names[lo + 1]:sub(1, 3) .. ">" .. names[lo + 2]:sub(1, 3)
+end
+
 S.VOICES = {
   {
-    name = "BD1", desc = "smooth 808 body", def = "dd_bd1", choke = true,
+    name = "BD1", desc = "zap kick", def = "dd_bd1", choke = true,
     smp = "BD",
     tone = {
-      T1 = { a = P("PITCH", 30, 110, "exp", 47, "Hz"),
-             b = P("DECAY", 0.08, 3, "exp", 0.7, "s") },
-      T2 = { a = P("SWEEP", 0, 4, "lin", 1.6, "oct"),
-             b = P("S.TIME", 0.004, 0.3, "exp", 0.045, "s") },
+      T1 = { a = P("PITCH", 30, 110, "exp", 52, "Hz"),
+             b = P("DECAY", 0.08, 3, "exp", 0.65, "s") },
+      T2 = { a = P("SWEEP", 0, 4, "lin", 2, "oct"),
+             b = P("S.TIME", 0.004, 0.3, "exp", 0.032, "s") },
       T3 = { a = P("PUNCH", 0, 1, "lin", 0.35, "", { fmtf = pct }),
-             b = P("BODY", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
-      T4 = { a = P("TONE", 200, 14000, "exp", 4000, "Hz"),
+             b = P("BODY", 0, 1, "lin", 0.45, "", { fmtf = pct }) },
+      T4 = { a = P("TONE", 200, 14000, "exp", 5000, "Hz"),
              b = P("LEVEL", 0, 1, "lin", 0.8, "", { fmtf = pct }) },
     },
   },
   {
-    name = "BD2", desc = "tube-driven thump", def = "dd_bd2", choke = true,
+    name = "BD2", desc = "808 boom", def = "dd_bd2", choke = true,
     smp = "BD",
     tone = {
-      T1 = { a = P("PITCH", 35, 160, "exp", 55, "Hz"),
-             b = P("DECAY", 0.05, 2, "exp", 0.45, "s") },
-      T2 = { a = P("SWEEP", 0, 5, "lin", 2.5, "oct"),
-             b = P("S.TIME", 0.003, 0.25, "exp", 0.03, "s") },
-      T3 = { a = P("TUBE", 0, 1, "lin", 0.55, "", { fmtf = pct }),
-             b = P("BIAS", 0, 0.8, "lin", 0.25, "", { fmtf = pct }) },
-      T4 = { a = P("SHAPE", 0, 1, "lin", 0.3, "", { fmtf = function(v)
-               local n = (v < 0.25) and "SINE" or ((v < 0.75) and "TRI" or "PULSE")
-               return n .. " " .. math.floor(v * 100 + 0.5) end }),
-             b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
+      T1 = { a = P("PITCH", 30, 160, "exp", 50, "Hz"),
+             b = P("DECAY", 0.08, 4, "exp", 0.5, "s") },
+      T2 = { a = P("SWEEP", 0, 2, "lin", 0.3, "oct"),
+             b = P("S.TIME", 0.002, 0.1, "exp", 0.008, "s") },
+      T3 = { a = P("CLICK", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("DRIVE", 0, 1, "lin", 0.15, "", { fmtf = pct }) },
+      T4 = { a = P("TONE", 200, 14000, "exp", 3000, "Hz"),
+             b = P("LEVEL", 0, 1, "lin", 0.8, "", { fmtf = pct }) },
     },
   },
   {
-    name = "CLP", desc = "grain clap", def = "dd_clp", choke = false,
+    name = "CLP", desc = "burst clap", def = "dd_clp", choke = false,
     smp = "CP",
     tone = {
-      T1 = { a = P("TONE", 500, 5000, "exp", 1300, "Hz"),
-             b = P("DECAY", 0.04, 1.5, "exp", 0.28, "s") },
-      T2 = { a = P("SPREAD", 0.003, 0.03, "exp", 0.011, "s"),
-             b = INT("GRAINS", 1, 6, 4) },
-      T3 = { a = P("SIZZLE", 0, 1, "lin", 0.3, "", { fmtf = pct }),
-             b = P("WIDTH", 0.15, 2, "exp", 0.6, "", { fmtf = function(v)
+      T1 = { a = P("TONE", 500, 5000, "exp", 1500, "Hz"),
+             b = P("DECAY", 0.04, 1.5, "exp", 0.25, "s") },
+      T2 = { a = P("SPREAD", 0.002, 0.03, "exp", 0.0045, "s"),
+             b = INT("GRAINS", 1, 20, 14) },
+      T3 = { a = P("SIZZLE", 0, 1, "lin", 0.2, "", { fmtf = pct }),
+             b = P("WIDTH", 0.15, 2, "exp", 0.9, "", { fmtf = function(v)
                return string.format("%.2f", v) end }) },
-      T4 = { a = P("SNAP", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+      T4 = { a = P("SNAP", 0, 1, "lin", 0.3, "", { fmtf = pct }),
              b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
     },
   },
   {
-    name = "SNR", desc = "tight snare", def = "dd_snr", choke = true,
+    name = "SNR", desc = "octave snare", def = "dd_snr", choke = true,
     smp = "SD",
     tone = {
-      T1 = { a = P("PITCH", 110, 420, "exp", 185, "Hz"),
-             b = P("DECAY", 0.03, 0.8, "exp", 0.16, "s") },
+      T1 = { a = P("PITCH", 100, 500, "exp", 165, "Hz"),
+             b = P("DECAY", 0.03, 0.8, "exp", 0.17, "s") },
       T2 = { a = P("SNAP", 0, 1.5, "lin", 0.8, "", { fmtf = pct }),
-             b = P("WIRES", 0.03, 1, "exp", 0.2, "s") },
-      T3 = { a = P("W.TONE", 1200, 10000, "exp", 4500, "Hz"),
-             b = P("RING", 0, 1, "lin", 0.25, "", { fmtf = pct }) },
-      T4 = { a = P("CRACK", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+             b = P("WIRES", 0.03, 1, "exp", 0.3, "s") },
+      T3 = { a = P("W.TONE", 400, 8000, "exp", 1100, "Hz"),
+             b = P("RING", 0, 1, "lin", 0.35, "", { fmtf = pct }) },
+      T4 = { a = P("CRACK", 0, 1, "lin", 0.3, "", { fmtf = pct }),
              b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
     },
   },
   {
-    name = "PRC1", desc = "modal: struck bar", def = "dd_prc1", choke = false,
+    name = "PRC1", desc = "clave > rim > bell", def = "dd_prc1", choke = false,
     smp = "MT",
     tone = {
-      T1 = { a = P("PITCH", 60, 2000, "exp", 320, "Hz"),
-             b = P("DECAY", 0.03, 3, "exp", 0.5, "s") },
-      T2 = { a = P("MATERL", 0, 1, "lin", 0.4, "", { fmtf = MATERIAL }),
-             b = P("DAMP", 0, 1, "lin", 0.4, "", { fmtf = pct }) },
-      T3 = { a = P("STRIKE", 0, 1, "lin", 0.5, "", { fmtf = pct }),
-             b = P("POS", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
-      T4 = { a = P("INHARM", 0, 1, "lin", 0.1, "", { fmtf = pct }),
+      T1 = { a = P("PITCH", 100, 2000, "exp", 540, "Hz"),
+             b = P("DECAY", 0.02, 1.5, "exp", 0.2, "s") },
+      T2 = { a = P("MODE", 0, 1, "lin", 1, "", { fmtf = PMODE }),
+             b = P("DETUNE", 1.2, 1.8, "lin", 1.5, "", { fmtf = function(v)
+               return string.format("x%.3f", v) end }) },
+      T3 = { a = P("STRIKE", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("TONE", 600, 8000, "exp", 2800, "Hz") },
+      T4 = { a = P("DRIVE", 0, 1, "lin", 0.2, "", { fmtf = pct }),
              b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
     },
   },
   {
-    name = "PRC2", desc = "modal: skin + bend", def = "dd_prc2", choke = false,
+    name = "PRC2", desc = "tom / conga", def = "dd_prc2", choke = false,
     smp = "LT",
     tone = {
-      T1 = { a = P("PITCH", 60, 2000, "exp", 150, "Hz"),
-             b = P("DECAY", 0.03, 3, "exp", 0.35, "s") },
-      T2 = { a = P("MATERL", 0, 1, "lin", 0.05, "", { fmtf = MATERIAL }),
-             b = P("DAMP", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T1 = { a = P("PITCH", 40, 600, "exp", 110, "Hz"),
+             b = P("DECAY", 0.03, 3, "exp", 0.38, "s") },
+      T2 = { a = P("BEND", 0, 1, "lin", 0.25, "", { fmtf = pct }),
+             b = P("B.TIME", 0.02, 0.6, "exp", 0.12, "s") },
       T3 = { a = P("STRIKE", 0, 1, "lin", 0.35, "", { fmtf = pct }),
-             b = P("BEND", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
-      T4 = { a = P("SPREAD", 0, 1, "lin", 0.2, "", { fmtf = pct }),
+             b = P("DRIVE", 0, 1, "lin", 0.45, "", { fmtf = pct }) },
+      T4 = { a = P("NOISE", 0, 1, "lin", 0.05, "", { fmtf = pct }),
              b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
     },
   },
@@ -231,11 +235,11 @@ S.VOICES = {
     smp = "CH",
     tone = {
       T1 = { a = P("PITCH", 120, 900, "exp", 330, "Hz"),
-             b = P("DECAY", 0.015, 1.8, "exp", 0.09, "s") },
+             b = P("DECAY", 0.015, 1.8, "exp", 0.14, "s") },
       T2 = { a = P("FOLD", 0, 1, "lin", 0.42, "", { fmtf = FOLD }),
              b = P("SPREAD", 0, 1, "lin", 0.85, "", { fmtf = pct }) },
-      T3 = { a = P("TONE", 1500, 14000, "exp", 7000, "Hz"),
-             b = P("RES", 0, 1, "lin", 0.2, "", { fmtf = pct }) },
+      T3 = { a = P("TONE", 2500, 14000, "exp", 8500, "Hz"),
+             b = P("RES", 0, 1, "lin", 0.35, "", { fmtf = pct }) },
       T4 = { a = P("CURVE", 0, 1, "lin", 0.3, "", { fmtf = pct }),
              b = P("LEVEL", 0, 1, "lin", 0.6, "", { fmtf = pct }) },
     },
@@ -255,6 +259,281 @@ S.VOICES = {
     },
   },
 }
+
+-- --------------------------------------------------------------------- kits
+--
+-- Three voicings of the same eight roles. Each track has its own KIT param,
+-- so they mix and match; on the SNAP page grid row 7, columns 1-3, tap a kit
+-- to put every track on it, or hold one and press track buttons to move
+-- just those:
+--
+--   WARM  the voices above, after the MFB Tanzbar
+--   WOOD  wooden, organic percussion: cajon, slit log, clappers, wood
+--         block, balafon, shaker, rainstick
+--   FM    after the Yamaha YMF262 (OPL3), as ALM's Akemie's Taiko plays it:
+--         two- and four-operator FM on the chip's waveforms, ratios and
+--         rhythm mode, through its floating-point DAC
+--
+-- Each kit has its own T1-T4 params, so a kit keeps how you left it while
+-- that track is on another. Everything else on a track (sample, noise, colour,
+-- mix, LFOs, steps) is shared: an LFO patched to T2a moves T2a in whichever
+-- kit is playing, and a lock on T2a is a position on that knob, whatever it
+-- turns. T1 is PITCH / DECAY and T4b LEVEL in every kit, so those locks mean
+-- the same thing everywhere.
+
+S.KITS = { "WARM", "WOOD", "FM" }
+-- The kit a track is playing is its KIT param, read from there: every
+-- module include()s its own copy of this file, so a table kept here would
+-- not be the same one from module to module. WARM until params exist.
+function S.kit_of(t)
+  local ok, k = pcall(params.get, params, "t" .. t .. "_kit")
+  return (ok and k) or 1
+end
+
+local OPL_MULTS = { "x1/2", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9",
+                    "x10", "x12", "x15" }
+local OPL_WAVES = { "SINE", "HALF", "ABS", "QUART", "ALT", "CAMEL", "SQUARE", "LOGSAW" }
+local function MULT(def) return OPT("RATIO", OPL_MULTS, def, { zero = true }) end
+local function WAVE(def) return OPT("WAVE", OPL_WAVES, def, { zero = true }) end
+local function ratio(v) return string.format("x%.2f", v) end
+local function signed(v) return string.format("%+d", math.floor(v * 100 + 0.5)) end
+
+-- WOOD's mallets, sticks and hands: how hard is how short the contact.
+-- WOOD on every voice is the wood itself: green and damp (it only thocks)
+-- to dry hardwood (it rings).
+local function WOOD(def) return P("WOOD", 0, 1, "lin", def, "", { fmtf = function(v)
+  local n = (v < 0.34) and "GREEN" or ((v < 0.67) and "SEASND" or "HARD")
+  return n .. " " .. math.floor(v * 100 + 0.5) end }) end
+
+S.WOOD_VOICES = {
+  {
+    name = "BD1", desc = "cajon bass", def = "dd_wbd1",
+    tone = {
+      T1 = { a = P("PITCH", 50, 140, "exp", 78, "Hz"),
+             b = P("DECAY", 0.08, 1.5, "exp", 0.35, "s") },
+      T2 = { a = P("HAND", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("BOX", 0, 1, "lin", 0.6, "", { fmtf = pct }) },
+      T3 = { a = P("FACE", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+             b = P("SLAP", 0, 1, "lin", 0.15, "", { fmtf = pct }) },
+      T4 = { a = WOOD(0.4),
+             b = P("LEVEL", 0, 1, "lin", 0.8, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "BD2", desc = "slit log", def = "dd_wbd2",
+    tone = {
+      T1 = { a = P("PITCH", 55, 260, "exp", 95, "Hz"),
+             b = P("DECAY", 0.05, 2, "exp", 0.6, "s") },
+      T2 = { a = P("MALLET", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("TONGUE", 0, 1, "lin", 0.4, "", { fmtf = pct }) },
+      T3 = { a = P("HOLLOW", 0, 1, "lin", 0.5, "", { fmtf = pct }),
+             b = P("BEND", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T4 = { a = WOOD(0.55),
+             b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "CLP", desc = "clappers", def = "dd_wclp",
+    tone = {
+      T1 = { a = P("TONE", 400, 3000, "exp", 1100, "Hz"),
+             b = P("DECAY", 0.02, 0.5, "exp", 0.09, "s") },
+      T2 = { a = P("SPREAD", 0.001, 0.03, "exp", 0.006, "s"),
+             b = INT("GRAINS", 1, 6, 2) },
+      T3 = { a = P("CRACK", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+             b = P("SIZE", 0, 1, "lin", 0.4, "", { fmtf = pct }) },
+      T4 = { a = WOOD(0.5),
+             b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "SNR", desc = "cajon slap", def = "dd_wsnr",
+    tone = {
+      T1 = { a = P("PITCH", 150, 600, "exp", 320, "Hz"),
+             b = P("DECAY", 0.03, 0.6, "exp", 0.14, "s") },
+      T2 = { a = P("SLAP", 0, 1, "lin", 0.6, "", { fmtf = pct }),
+             b = P("WIRES", 0, 1.5, "lin", 0.6, "", { fmtf = pct }) },
+      T3 = { a = P("W.TONE", 1000, 8000, "exp", 3500, "Hz"),
+             b = P("W.DEC", 0.02, 0.6, "exp", 0.15, "s") },
+      T4 = { a = WOOD(0.4),
+             b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "PRC1", desc = "wood block", def = "dd_wprc1",
+    tone = {
+      T1 = { a = P("PITCH", 200, 3000, "exp", 700, "Hz"),
+             b = P("DECAY", 0.02, 1, "exp", 0.12, "s") },
+      T2 = { a = P("HOLLOW", 0, 1, "lin", 0.5, "", { fmtf = pct }),
+             b = P("STICK", 0, 1, "lin", 0.6, "", { fmtf = pct }) },
+      T3 = { a = P("SHAPE", 0, 1, "lin", 0.3, "", { fmtf = function(v)
+               local n = (v < 0.25) and "BLOCK" or ((v < 0.75) and "TEMPLE" or "CLAVE")
+               return n .. " " .. math.floor(v * 100 + 0.5) end }),
+             b = P("POS", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T4 = { a = WOOD(0.6),
+             b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "PRC2", desc = "balafon", def = "dd_wprc2",
+    tone = {
+      T1 = { a = P("PITCH", 100, 1500, "exp", 262, "Hz"),
+             b = P("DECAY", 0.05, 3, "exp", 0.6, "s") },
+      T2 = { a = P("MALLET", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+             b = P("GOURD", 0, 1, "lin", 0.5, "", { fmtf = pct }) },
+      T3 = { a = P("BUZZ", 0, 1, "lin", 0.25, "", { fmtf = pct }),
+             b = P("TUNE", 0, 1, "lin", 0.1, "", { fmtf = function(v)
+               return (v < 0.5 and "CARVED " or "PLAIN ") .. math.floor(v * 100 + 0.5) end }) },
+      T4 = { a = WOOD(0.6),
+             b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "HAT", desc = "shaker", def = "dd_what",
+    tone = {
+      T1 = { a = P("PITCH", 1500, 9000, "exp", 4000, "Hz"),
+             b = P("DECAY", 0.02, 1, "exp", 0.12, "s") },
+      T2 = { a = P("BEANS", 0, 1, "lin", 0.5, "", { fmtf = pct }),
+             b = P("SHELL", 0, 1, "lin", 0.4, "", { fmtf = pct }) },
+      T3 = { a = P("SPREAD", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+             b = P("ATTACK", 0.001, 0.2, "exp", 0.012, "s") },
+      T4 = { a = P("GRAIN", 0, 1, "lin", 0.5, "", { fmtf = function(v)
+               return (v < 0.5 and "SAND " or "SEEDS ") .. math.floor(v * 100 + 0.5) end }),
+             b = P("LEVEL", 0, 1, "lin", 0.6, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "CYM", desc = "rainstick", def = "dd_wcym",
+    tone = {
+      T1 = { a = P("PITCH", 1000, 6000, "exp", 2500, "Hz"),
+             b = P("DECAY", 0.3, 6, "exp", 2.2, "s") },
+      T2 = { a = P("DENSITY", 0, 1, "lin", 0.5, "", { fmtf = pct }),
+             b = P("SPREAD", 0, 1, "lin", 0.5, "", { fmtf = pct }) },
+      T3 = { a = P("TUBE", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("RING", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T4 = { a = P("SWELL", 0.001, 1.5, "exp", 0.25, "s"),
+             b = P("LEVEL", 0, 1, "lin", 0.55, "", { fmtf = pct }) },
+    },
+  },
+}
+
+S.FM_VOICES = {
+  {
+    name = "BD1", desc = "2-op fm kick", def = "dd_fbd1",
+    tone = {
+      T1 = { a = P("PITCH", 30, 120, "exp", 50, "Hz"),
+             b = P("DECAY", 0.08, 3, "exp", 0.55, "s") },
+      T2 = { a = P("SWEEP", 0, 4, "lin", 2.2, "oct"),
+             b = P("S.TIME", 0.004, 0.3, "exp", 0.03, "s") },
+      T3 = { a = P("FM", 0, 1, "lin", 0.35, "", { fmtf = pct }),
+             b = MULT(2) },
+      T4 = { a = WAVE(1),
+             b = P("LEVEL", 0, 1, "lin", 0.8, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "BD2", desc = "4-op fb kick", def = "dd_fbd2",
+    tone = {
+      T1 = { a = P("PITCH", 35, 160, "exp", 56, "Hz"),
+             b = P("DECAY", 0.05, 2, "exp", 0.4, "s") },
+      T2 = { a = P("SWEEP", 0, 5, "lin", 3, "oct"),
+             b = P("S.TIME", 0.003, 0.25, "exp", 0.02, "s") },
+      T3 = { a = P("FM", 0, 1, "lin", 0.45, "", { fmtf = pct }),
+             b = P("FDBK", 0, 1, "lin", 0.5, "", { fmtf = pct }) },
+      T4 = { a = MULT(3),
+             b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "CLP", desc = "feedback clap", def = "dd_fclp",
+    tone = {
+      T1 = { a = P("TONE", 500, 5000, "exp", 1200, "Hz"),
+             b = P("DECAY", 0.04, 1.5, "exp", 0.3, "s") },
+      T2 = { a = P("SPREAD", 0.003, 0.03, "exp", 0.011, "s"),
+             b = INT("GRAINS", 1, 6, 4) },
+      T3 = { a = P("FM", 0, 1, "lin", 0.7, "", { fmtf = pct }),
+             b = MULT(4) },
+      T4 = { a = WAVE(1),
+             b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "SNR", desc = "rhythm-mode sd", def = "dd_fsnr",
+    tone = {
+      T1 = { a = P("PITCH", 110, 420, "exp", 200, "Hz"),
+             b = P("DECAY", 0.03, 0.8, "exp", 0.15, "s") },
+      T2 = { a = P("SNAP", 0, 1.5, "lin", 0.9, "", { fmtf = pct }),
+             b = P("N.DEC", 0.03, 1, "exp", 0.2, "s") },
+      T3 = { a = P("FM", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+             b = MULT(2) },
+      T4 = { a = WAVE(1),
+             b = P("LEVEL", 0, 1, "lin", 0.75, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "PRC1", desc = "2-op fm tom", def = "dd_fprc1",
+    tone = {
+      T1 = { a = P("PITCH", 60, 2000, "exp", 300, "Hz"),
+             b = P("DECAY", 0.03, 3, "exp", 0.5, "s") },
+      T2 = { a = P("FM", 0, 1, "lin", 0.4, "", { fmtf = pct }),
+             b = P("M.DEC", 0.01, 2, "exp", 0.15, "s") },
+      T3 = { a = MULT(4),
+             b = P("FDBK", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
+      T4 = { a = WAVE(1),
+             b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "PRC2", desc = "taiko", def = "dd_fprc2",
+    tone = {
+      T1 = { a = P("PITCH", 60, 2000, "exp", 130, "Hz"),
+             b = P("DECAY", 0.03, 3, "exp", 0.45, "s") },
+      T2 = { a = P("FM", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("M.DEC", 0.01, 2, "exp", 0.06, "s") },
+      T3 = { a = P("SWEEP", 0, 2, "lin", 0.7, "oct"),
+             b = MULT(2) },
+      T4 = { a = WAVE(2),
+             b = P("LEVEL", 0, 1, "lin", 0.7, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "HAT", desc = "rhythm-mode hh", def = "dd_fhat",
+    tone = {
+      T1 = { a = P("PITCH", 100, 800, "exp", 330, "Hz"),
+             b = P("DECAY", 0.015, 1.8, "exp", 0.08, "s") },
+      T2 = { a = P("RATIO", 0.5, 4, "exp", 1.41, "", { fmtf = ratio }),
+             b = P("NOISE", 0, 1, "lin", 0.6, "", { fmtf = pct }) },
+      T3 = { a = P("FM", 0, 1, "lin", 0.2, "", { fmtf = pct }),
+             b = P("TONE", 1500, 14000, "exp", 6000, "Hz") },
+      T4 = { a = P("CURVE", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("LEVEL", 0, 1, "lin", 0.6, "", { fmtf = pct }) },
+    },
+  },
+  {
+    name = "CYM", desc = "rhythm-mode cy", def = "dd_fcym",
+    tone = {
+      T1 = { a = P("PITCH", 150, 1200, "exp", 420, "Hz"),
+             b = P("DECAY", 0.2, 6, "exp", 1.8, "s") },
+      T2 = { a = P("RATIO", 0.5, 4, "exp", 1.76, "", { fmtf = ratio }),
+             b = P("NOISE", 0, 1, "lin", 0.2, "", { fmtf = pct }) },
+      T3 = { a = P("FM", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("TONE", 1500, 12000, "exp", 4000, "Hz") },
+      T4 = { a = P("TREM", 0, 1, "lin", 0.3, "", { fmtf = pct }),
+             b = P("LEVEL", 0, 1, "lin", 0.55, "", { fmtf = pct }) },
+    },
+  },
+}
+
+-- the same roles in every kit: the sample defaults and the duck's source
+-- names come from WARM
+S.KIT_VOICES = { S.VOICES, S.WOOD_VOICES, S.FM_VOICES }
+for k = 2, #S.KIT_VOICES do
+  for t, v in ipairs(S.KIT_VOICES[k]) do
+    v.smp, v.choke = S.VOICES[t].smp, S.VOICES[t].choke
+  end
+end
+
+-- a track's voice in a kit, the one it is playing if none is given
+function S.voice(t, kit) return S.KIT_VOICES[kit or S.kit_of(t)][t] end
 
 -- ------------------------------------------------- shared per-track controls
 --
@@ -287,8 +566,10 @@ S.NOISE = {
 S.COL = {
   C1 = { a = P("DRIVE", 0, 1, "lin", 0, "", { fmtf = pct, arg = "drive", strip = true }),
          b = P("WARMTH", 0, 1, "lin", 0.3, "", { fmtf = pct, arg = "warmth", strip = true }) },
-  C2 = { a = P("CRUSH", 0, 1, "lin", 0, "", { fmtf = pct, arg = "crush", strip = true }),
-         b = P("DUST", 0, 1, "lin", 0, "", { fmtf = pct, arg = "dust", strip = true }) },
+  -- C2 is the track's sends to the shared DELAY and SPRING, whose own
+  -- controls are the SPACE cells on the master COLOUR page
+  C2 = { a = P("DELAY", 0, 1, "lin", 0, "", { fmtf = pct, arg = "dsend", strip = true }),
+         b = P("SPRING", 0, 1, "lin", 0, "", { fmtf = pct, arg = "ssend", strip = true }) },
 }
 
 -- ---------------------------------------------------- step controls (TC / P)
@@ -341,17 +622,21 @@ end
 
 -- ------------------------------------------------------------- lookups
 
--- The two parameters a button opens on a given voice, or nil for LFO buttons.
-function S.pair(vi, btn)
+-- The two parameters a button opens on a given voice (in the kit given, or
+-- the one the track is playing), or nil for LFO buttons.
+function S.pair(vi, btn, kit)
   local b = S.BTN[btn]
   if not b then return nil end
-  if b.kind == "tone" then return S.VOICES[vi].tone[btn] end
+  if b.kind == "tone" then return S.voice(vi, kit).tone[btn] end
   if b.kind == "smp" then return S.SAMPLE[btn] end
   if b.kind == "noise" then return S.NOISE[btn] end
   if b.kind == "col" then return S.COL[btn] end
   if b.kind == "trig" or b.kind == "pulse" then return S.STEP[btn] end
   return nil
 end
+
+-- the keys that differ from kit to kit
+function S.is_tone(key) return key:match("^T%d[ab]$") ~= nil end
 
 -- every sound key on a voice, e.g. "T1a", in a fixed order
 S.SOUND_BTNS = { "T1", "T2", "T3", "T4", "S1", "S2", "S3", "S4", "N1", "N2", "C1", "C2" }
@@ -366,15 +651,15 @@ function S.sound_keys()
 end
 
 -- the parameter behind a sound key on a voice
-function S.param(vi, key)
+function S.param(vi, key, kit)
   local btn, side = key:sub(1, -2), key:sub(-1)
-  local pair = S.pair(vi, btn)
+  local pair = S.pair(vi, btn, kit)
   return pair and pair[side]
 end
 
 -- the engine argument a sound key is sent as
-function S.arg(vi, key)
-  local p = S.param(vi, key)
+function S.arg(vi, key, kit)
+  local p = S.param(vi, key, kit)
   if p and p.arg then return p.arg end
   return key:lower()   -- T1a -> t1a
 end
@@ -383,6 +668,30 @@ end
 
 S.SPEEDS = { "1/32", "1/16T", "1/16", "1/8T", "1/8", "1/4" }
 S.SPEED_BEATS = { 1 / 8, 1 / 6, 1 / 4, 1 / 3, 1 / 2, 1 }
+
+-- MAIN's pairs, E1 picks one: E2 turns the first, E3 the second
+S.MAIN_PAIRS = {
+  { "LENGTH", "TIMING" },
+  { "DIRECTION", "DILLA" },
+}
+
+-- the order a track walks its steps in (see lib/seq)
+S.DIRS = { "FWD", "BWD", "PEND", "WALK", "RND" }
+
+-- DILLA at 100 %, in pulses (see lib/seq). LEAN is where each voice sits
+-- against the beat, by track: the kicks push a hair early, claps and snares
+-- lay back, percussion a little late, hats and cymbal on the grid. SWAY is
+-- how much of the way to a triplet each voice's off-beats are dragged, the
+-- hats furthest. WANDER is the slow loose drift on top, JITTER hit to hit.
+S.DILLA = {
+  LEAN   = { -0.04, -0.03, 0.10, 0.12, 0.05, 0.06, 0.0, 0.02 },
+  SWAY   = { 0.35, 0.35, 0.5, 0.5, 0.7, 0.7, 1.0, 0.9 },
+  TRIP   = 1 / 3,   -- a sixteenth's off-beat moved onto the triplet
+  WANDER = 0.05,
+  JITTER = 0.03,
+}
+-- the furthest any of that can put a hit, for the tests and for sanity
+S.DILLA_MAX = 0.12 + (1.0 / 3) + 0.05 + 0.03
 
 S.SWING_GRID = { "1/16", "1/8" }
 S.SWING_UNIT = { 1 / 4, 1 / 2 }
@@ -393,29 +702,107 @@ S.LFO_SHAPES = { "SINE", "TRI", "RAMP", "SQUARE", "S+H", "DRIFT" }
 
 -- --------------------------------------------------------- master COLOUR
 --
--- Pappus' colour stage, rebuilt for a drum bus: drive > crush > loss >
--- envelope-following noise > wow, then a glue compressor and the output.
--- E1 picks a cell, E2 and E3 turn its two halves.
+-- Four banks of cells, walked in order by E1:
+--
+--   BUSS     after Ableton's Drum Buss: comp > drive > crunch > damp >
+--            transients > boom, MIX against the dry bus, then the level
+--   DUCK     the sidechain: one track's hits duck the other seven
+--   TEXTURE  Pappus' colour stage: tilt > loss > envelope-following noise
+--            > wow, after the buss, then a Juno-style CHORUS
+--   SPACE    the shared delay and spring every track's C2 sends into;
+--            their returns go through the buss and the texture with the rest
+--
+-- E2 and E3 turn a cell's two halves. `to` is the engine command a cell's
+-- values go to (colour if unset).
+
+S.COLOUR_BANKS = { "BUSS", "DUCK", "TEXTURE", "SPACE" }
+
+-- delay TIME, in beats, so it follows the tempo
+local DTIMES = { "1/16", "1/8T", "1/8", "3/16", "1/4T", "1/4", "3/8", "1/2" }
+local DBEATS = { 1 / 4, 1 / 3, 1 / 2, 3 / 4, 2 / 3, 1, 3 / 2, 2 }
+
+-- the duck's source: off, or a track by its voice's name
+local SOURCES = { "OFF" }
+for t, v in ipairs(S.VOICES) do SOURCES[t + 1] = v.name end
 
 S.COLOUR = {
   { name = "DRIVE", short = "DRV",
     a = P("DRIVE", 0, 1, "lin", 0, "", { fmtf = pct, arg = "drive" }),
+    b = OPT("TYPE", { "SOFT", "MEDIUM", "HARD" }, 1, { arg = "drivetype" }) },
+  { name = "CRUNCH", short = "CRN",
+    a = P("CRUNCH", 0, 1, "lin", 0, "", { fmtf = pct, arg = "crunch" }),
+    b = P("DAMP", 400, 20000, "exp", 20000, "Hz", { arg = "bussdamp", fmtf = function(v)
+      if v > 19500 then return "OPEN" end
+      return S.fmt({ unit = "Hz" }, v) end }) },
+  { name = "TRANS", short = "TRN",
+    a = P("TRANS", -1, 1, "lin", 0, "bi", { arg = "trans", fmtf = function(v)
+      return string.format("%+d", math.floor(v * 100 + 0.5)) end }),
+    b = P("COMP", 0, 1, "lin", 0, "", { fmtf = pct, arg = "comp" }) },
+  { name = "BOOM", short = "BOM",
+    a = P("BOOM", 0, 1, "lin", 0, "", { fmtf = pct, arg = "boom" }),
+    b = P("FREQ", 30, 120, "exp", 55, "Hz", { arg = "boomfreq" }) },
+  { name = "B.DECAY", short = "B.D",
+    a = P("DECAY", 0.05, 1.5, "exp", 0.4, "s", { arg = "boomdecay" }),
     b = P("TILT", -1, 1, "lin", 0, "bi", { arg = "ctilt" }) },
-  { name = "CRUSH", short = "CRU",
-    a = P("CRUSH", 0, 1, "lin", 0, "", { fmtf = pct, arg = "crush" }),
-    b = OPT("MODE", { "BITS", "REDUX", "BIT+RDX" }, 3, { arg = "crushmode" }) },
-  { name = "LOSS", short = "LOS",
+  { name = "OUT", short = "OUT",
+    a = P("MIX", 0, 1, "lin", 1, "", { fmtf = pct, arg = "bussmix" }),
+    b = P("LEVEL", 0, 1.5, "lin", 1, "", { fmtf = pct, arg = "outlvl" }) },
+
+  { name = "DUCK", short = "DCK", bank = 2, to = "duck",
+    a = OPT("SOURCE", SOURCES, 1, { arg = "scsrc", zero = true }),
+    b = P("AMOUNT", 0, 1, "lin", 0.5, "", { fmtf = pct, arg = "scamt" }) },
+  { name = "RELEASE", short = "REL", bank = 2, to = "duck",
+    a = P("RELEASE", 0.02, 1.5, "exp", 0.18, "s", { arg = "screl" }),
+    b = P("FX", 0, 1, "lin", 0.5, "", { fmtf = pct, arg = "scfx" }) },
+
+  { name = "LOSS", short = "LOS", bank = 3,
     a = P("LOSS", 0, 1, "lin", 0, "", { fmtf = pct, arg = "loss" }),
     b = P("WOW", 0, 1, "lin", 0, "", { fmtf = pct, arg = "wow" }) },
-  { name = "NOISE", short = "NOI",
+  { name = "NOISE", short = "NOI", bank = 3,
     a = P("NOISE", 0, 1, "lin", 0, "", { fmtf = pct, arg = "noise" }),
     b = OPT("TYPE", { "WHITE", "PINK", "DUST", "CRACKL", "HISS" }, 2, { arg = "noisetype" }) },
-  { name = "N.SHAPE", short = "N.S",
+  { name = "N.SHAPE", short = "N.S", bank = 3,
     a = P("N.DEC", 0.01, 4, "exp", 0.25, "s", { arg = "noisedecay" }),
     b = P("N.TONE", 60, 12000, "exp", 1200, "Hz", { arg = "noisetone" }) },
-  { name = "OUT", short = "OUT",
-    a = P("GLUE", 0, 1, "lin", 0.2, "", { fmtf = pct, arg = "glue" }),
-    b = P("LEVEL", 0, 1.5, "lin", 1, "", { fmtf = pct, arg = "outlvl" }) },
+  -- a Juno's chorus: CHORUS is how much (half and half at the top), RATE
+  -- and DEPTH the sweep, BBD how much of the bucket brigade's dark, soft,
+  -- faintly hissing character comes with it
+  { name = "CHORUS", short = "CHO", bank = 3,
+    a = P("CHORUS", 0, 1, "lin", 0, "", { fmtf = pct, arg = "chorus" }),
+    b = P("RATE", 0.05, 8, "exp", 0.5, "Hz", { arg = "chrate", fmtf = function(v)
+      return string.format(v < 1 and "%.2f Hz" or "%.1f Hz", v) end }) },
+  { name = "C.SHAPE", short = "C.S", bank = 3,
+    a = P("DEPTH", 0, 1, "lin", 0.5, "", { fmtf = pct, arg = "chdepth" }),
+    b = P("BBD", 0, 1, "lin", 0.3, "", { fmtf = pct, arg = "chbbd" }) },
+
+  { name = "DELAY", short = "DLY", bank = 4, to = "fx",
+    a = OPT("TIME", DTIMES, 4, { arg = "dtime", beats = DBEATS }),
+    b = P("FEEDBK", 0, 1.1, "lin", 0.35, "", { fmtf = pct, arg = "fdbk" }) },
+  { name = "D.SHAPE", short = "D.S", bank = 4, to = "fx",
+    a = P("D.TONE", 300, 16000, "exp", 3500, "Hz", { arg = "dtone" }),
+    b = P("PING", 0, 1, "lin", 0.6, "", { fmtf = pct, arg = "ping" }) },
+  -- the SPRING tank: DECAY is how long it rings, TONE where its top goes,
+  -- DWELL how hard the input transducer is driven (louder, longer, dirtier)
+  -- and DRIP how far each echo smears into a falling chirp
+  { name = "SPRING", short = "SPR", bank = 4, to = "fx",
+    a = P("DECAY", 0.3, 8, "exp", 2.2, "s", { arg = "sdecay" }),
+    b = P("TONE", 800, 7000, "exp", 3800, "Hz", { arg = "stone" }) },
+  { name = "S.SHAPE", short = "S.S", bank = 4, to = "fx",
+    a = P("DWELL", 0, 1, "lin", 0.4, "", { fmtf = pct, arg = "dwell" }),
+    b = P("DRIP", 0, 1, "lin", 0.5, "", { fmtf = pct, arg = "drip" }) },
+  { name = "RETURN", short = "RET", bank = 4, to = "fx",
+    a = P("DELAY", 0, 1.5, "lin", 0.8, "", { fmtf = pct, arg = "dret" }),
+    b = P("SPRING", 0, 1.5, "lin", 0.8, "", { fmtf = pct, arg = "sret" }) },
 }
+
+-- each bank's cells in order, as indices into S.COLOUR
+S.BANK_CELLS = {}
+for b = 1, #S.COLOUR_BANKS do S.BANK_CELLS[b] = {} end
+for i, cell in ipairs(S.COLOUR) do
+  cell.bank = cell.bank or 1
+  local list = S.BANK_CELLS[cell.bank]
+  list[#list + 1] = i
+  cell.row = #list   -- its row on the grid, and its slot on the screen
+end
 
 return S

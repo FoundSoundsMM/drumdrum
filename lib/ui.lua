@@ -1,32 +1,51 @@
 -- drumdrum / screen
 --
--- Three pages and three overlays. The pages are what the grid's MIX and
--- COLOUR buttons choose between; the overlays are momentary and sit on top
--- of whichever page is open:
+-- Six pages and four overlays. The pages are what the grid's MIX and
+-- COLOUR buttons (and SHIFT + PLAY for SNAP, SHIFT + MIX for PERFORM,
+-- SHIFT + SWING for CLIPS, whose E2 is the RAIN)
+-- choose between; the overlays are momentary and sit on top of whichever
+-- page is open:
 --
 --   CONTROL  a held (or latched) track control: two parameters, E2 and E3
 --   LFO      a held LFO button: its shape, RATE on E2, DEPTH on E3
 --   SWING    the held SWING button: AMOUNT on E2, GRID on E3
+--   TAPE     SHIFT + COLOUR held: PITCH on E2, LENGTH on E3
+--   REC      on MAIN while a sample take is armed (lib/sampler): START on
+--            E1, LEVEL on E2, SOURCE on E3, K2 cancel, K3 now / stop
+--
+-- K2+K3 together puts back whatever the open screen's E2 and E3 turn.
 
 local S = include("drumdrum/lib/spec")
 
 local U = {}
-local St, G, L
+local St, G, L, N, F, C, R
 
-function U.init(state, grid_ui, lfo)
-  St, G, L = state, grid_ui, lfo
+function U.init(state, grid_ui, lfo, snap, perform, clips, sampler)
+  St, G, L, N, F, C, R = state, grid_ui, lfo, snap, perform, clips, sampler
 end
 
 local SHORT = { "BD1", "BD2", "CLP", "SNR", "PR1", "PR2", "HAT", "CYM" }
 U.SHORT = SHORT
 
+-- s trimmed (with a ~) until it is no wider than w pixels in the current
+-- font. Measured, not counted: 04B_03 is proportional, so "m" and "i" differ.
+local function fit(s, w)
+  if screen.text_extents(s) <= w then return s end
+  while #s > 1 and screen.text_extents(s .. "~") > w do s = s:sub(1, -2) end
+  return s .. "~"
+end
+
 local function header(left, right)
   screen.font_face(1)
   screen.font_size(8)
+  if St.old_engine then right = "RESTART NORNS" end
+  local has_right = right and right ~= ""
+  -- the right side is the live readout, so the title gives way to it
+  if has_right then left = fit(left, 124 - screen.text_extents(right)) end
   screen.level(15)
   screen.move(0, 7)
   screen.text(left)
-  if right and right ~= "" then
+  if has_right then
     screen.level(5)
     screen.move(128, 7)
     screen.text_right(right)
@@ -71,11 +90,12 @@ end
 function U.main()
   local t = St.sel
   local tr = St.track()
-  local v = S.VOICES[t]
+  local v = S.voice(t)
   local right = string.format("%s %d", St.playing and ">" or "||",
     math.floor(params:get("clock_tempo") + 0.5))
   if St.fill then right = "FILL  " .. right end
-  header("drumdrum", right)
+  if tr.mute then right = "MUTED  " .. right end
+  header("drumdrum " .. S.KITS[S.kit_of(t)]:lower(), right)
 
   screen.font_size(16)
   screen.level(tr.mute and 4 or 15)
@@ -83,11 +103,12 @@ function U.main()
   screen.text(v.name)
   screen.font_size(8)
   screen.level(5)
+  -- the left column ends where the step miniature and the E2/E3 pair start
   screen.move(0, 36)
-  screen.text(v.desc)
+  screen.text(fit(v.desc, 61))
   screen.level(3)
   screen.move(0, 45)
-  screen.text(clip_text(St.sample_name(t), 15))
+  screen.text(fit(St.sample_name(t), 61))
 
   -- the 64 steps in miniature
   for i = 1, S.NSTEPS do
@@ -106,12 +127,24 @@ function U.main()
       screen.fill()
     end
   end
-  screen.level(4)
-  screen.move(128, 36)
-  screen.text_right("LEN " .. tr.len .. "  " .. S.SPEEDS[tr.speed])
-  if tr.mute then
-    screen.move(128, 45)
-    screen.text_right("MUTED")
+  -- the pair E2 and E3 turn, and which of the pairs E1 is on
+  local pair = S.MAIN_PAIRS[St.main_pair]
+  local vals
+  if St.main_pair == 1 then vals = { tostring(tr.len), S.SPEEDS[tr.speed] }
+  else vals = { S.DIRS[tr.dir] or "FWD", tr.dilla .. "%" } end
+  for k = 1, 2 do
+    local y = 36 + ((k - 1) * 9)
+    screen.level(4)
+    screen.move(64, y)
+    screen.text(pair[k])
+    screen.level(15)
+    screen.move(128, y)
+    screen.text_right(vals[k])
+  end
+  for k = 1, #S.MAIN_PAIRS do
+    screen.level((k == St.main_pair) and 15 or 3)
+    screen.rect(64 + ((k - 1) * 4), 30, 2, 2)
+    screen.fill()
   end
 
   -- the eight tracks, flashing as they fire
@@ -138,7 +171,7 @@ end
 
 function U.mix()
   local t = St.sel
-  header("MIX  " .. S.VOICES[t].name, string.format("PAN %+.2f  TILT %+.2f",
+  header("MIX  " .. S.VOICES[t].name, string.format("P %+.2f  T %+.2f",
     params:get(St.pid(t, "pan")), params:get(St.pid(t, "tilt"))))
   for k = 1, S.NTRACKS do
     local x0 = (k - 1) * 16
@@ -193,17 +226,19 @@ end
 -- each the same travelling wave sampled a little further along. Every control
 -- owns one axis of the surface:
 --
---   DRIVE   sharpens the crests       CRUSH   terraces the field
+--   DRIVE   sharpens the crests       CRUNCH  terraces the field
 --   LOSS    breaks lines into dashes  WOW     shears the sheet
 --   NOISE   a hit throws a ripple across it, N.DEC is how far it travels
---   N.TONE  the spatial frequency     GLUE    squeezes the stack together
+--   N.TONE  the spatial frequency     COMP    squeezes the stack together
+--   BOOM    swells the whole surface  DUCK    a source hit pulls it flat
 --   TILT    leans the light: dark and heavy one way, bright the other
 --
 -- and the output level sets the amplitude, so the surface breathes with the
 -- drums. A hit throws its ripple from where that track sits on the grid.
 
-local vis = { env = 0, drive = 0, crush = 0, noise = 0, loss = 0, rot = 0,
-              glue = 0, ndec = 0, tone = 0, wow = 0, wob = 0, tilt = 0 }
+local vis = { env = 0, drive = 0, crunch = 0, noise = 0, loss = 0, rot = 0,
+              comp = 0, ndec = 0, tone = 0, wow = 0, wob = 0, tilt = 0,
+              boom = 0, duck = 0, chorus = 0, cph = 0 }
 local kpulse = {}
 local KPULSE_MAX = 6
 local KLINES = 6
@@ -214,7 +249,13 @@ local function ease(a, b, k) return a + ((b - a) * k) end
 local function craw(arg) return params:get_raw("col_" .. arg) end
 
 function U.ripple(t, vel)
-  if St.page ~= "colour" or vis.noise < 0.02 then return end
+  if St.page ~= "colour" then return end
+  -- the duck's source pulls the surface flat for a moment
+  local src = params:get("col_scsrc") - 1
+  if t == src then
+    vis.duck = math.max(vis.duck, params:get("col_scamt") * (vel or 1))
+  end
+  if vis.noise < 0.02 then return end
   if #kpulse >= KPULSE_MAX then table.remove(kpulse, 1) end
   local x0 = ((t - 1) * 16) + 8
   kpulse[#kpulse + 1] = { x = x0, dir = (t % 2 == 0) and -1 or 1, age = 0,
@@ -225,13 +266,17 @@ function U.vis_update(dt)
   local k = math.min(dt * 6, 1)
   vis.env   = ease(vis.env, math.min(St.outamp * 2.2, 1), math.min(dt * 9, 1))
   vis.drive = ease(vis.drive, craw("drive"), k)
-  vis.crush = ease(vis.crush, craw("crush"), k)
+  vis.crunch = ease(vis.crunch, craw("crunch"), k)
+  vis.boom  = ease(vis.boom, craw("boom"), k)
   vis.noise = ease(vis.noise, craw("noise"), k)
   vis.loss  = ease(vis.loss, craw("loss"), k)
-  vis.glue  = ease(vis.glue, craw("glue"), k)
+  vis.comp  = ease(vis.comp, craw("comp"), k)
+  vis.duck  = math.max(vis.duck - (dt * 4), 0)
   vis.ndec  = ease(vis.ndec, craw("noisedecay"), k)
   vis.tone  = ease(vis.tone, craw("noisetone"), k)
   vis.wow   = ease(vis.wow, craw("wow"), k)
+  vis.chorus = ease(vis.chorus, craw("chorus"), k)
+  vis.cph   = (vis.cph + (dt * params:get("col_chrate") * math.pi * 2)) % (math.pi * 2)
   vis.tilt  = ease(vis.tilt, (craw("ctilt") * 2) - 1, k)
   vis.rot   = (vis.rot + (dt * (0.10 + (vis.env * 0.35)))) % (math.pi * 2)
   vis.wob   = (vis.wob + (dt * (0.13 + (vis.wow * 0.9)))) % (math.pi * 2)
@@ -250,14 +295,15 @@ local function draw_field(top, h)
   local STEPS = 24
   local dx = 128 / STEPS
 
-  local amp = (h * 0.5) * (0.20 + (vis.env * 0.62))
+  local amp = (h * 0.5) * (0.20 + (vis.env * 0.62)) * (1 + (vis.boom * 0.3))
+    * (1 - (vis.duck * 0.6))
   if byp then amp = amp * 0.1 end
   local spread = (h - 1) * (1 - ((amp / (h * 0.5)) * 0.52))
   local kx = (math.pi * 2) * (0.55 + (vis.tone * 1.5)) / 128
   local pa = vis.rot * 2.3
   local pb = vis.rot * -1.41
-  local squash = 1 - (vis.glue * 0.28)
-  local terr = (vis.crush > 0.02) and (0.5 + (vis.crush * 4.5)) or 0
+  local squash = 1 - (vis.comp * 0.28)
+  local terr = (vis.crunch > 0.02) and (0.5 + (vis.crunch * 4.5)) or 0
   local sharp = 1 - (vis.drive * 0.68)
   local pspan = 34 + (vis.ndec * 110)
   local pwide = 9 + (vis.ndec * 13)
@@ -297,7 +343,7 @@ local function draw_field(top, h)
     end
   end
 
-  local gap = math.max(2.6, (spread * squash) / (KLINES - 1) * 0.4) * (1 - vis.crush)
+  local gap = math.max(2.6, (spread * squash) / (KLINES - 1) * 0.4) * (1 - vis.crunch)
   if gap > 0.2 then
     for s = 0, STEPS do
       for li = 2, KLINES do
@@ -311,6 +357,23 @@ local function draw_field(top, h)
           if li > 1 and (kY[li][s] - kY[li - 1][s]) >= gap then break end
         end
       end
+    end
+  end
+
+  -- CHORUS: each line doubled by a faint twin that drifts up and down
+  -- with the sweep, further the deeper it goes, under the lines themselves
+  if vis.chorus > 0.02 and not byp then
+    local cd = vis.chorus * (1 + (params:get_raw("col_chdepth") * 3))
+    screen.level(math.max(1, math.floor(1 + (vis.chorus * 3) + 0.5)))
+    for li = 1, KLINES do
+      local tt = (li - 1) / (KLINES - 1)
+      local oy = math.sin(vis.cph + (tt * 2.1)) * cd
+      local ox = math.cos(vis.cph + (tt * 1.3)) * cd * 0.6
+      for s = 0, STEPS do
+        local y = util.clamp(kY[li][s] + oy, top, bot)
+        if s == 0 then screen.move(ox, y) else screen.line((s * dx) + ox, y) end
+      end
+      screen.stroke()
     end
   end
 
@@ -349,11 +412,13 @@ local function draw_field(top, h)
 end
 
 function U.colour()
-  -- the cells, E1 walks them
+  -- the open bank's cells, E1 walks them and on into the next bank
   screen.font_face(1)
   screen.font_size(8)
-  for i, cell in ipairs(S.COLOUR) do
-    local x = (i - 1) * 21 + 1
+  local bank = S.COLOUR[St.col_sel].bank
+  for _, i in ipairs(S.BANK_CELLS[bank]) do
+    local cell = S.COLOUR[i]
+    local x = (cell.row - 1) * 21 + 1
     if i == St.col_sel then
       screen.level(15)
       screen.rect(x - 1, 0, 20, 9)
@@ -365,6 +430,14 @@ function U.colour()
     screen.move(x + 9, 7)
     screen.text_center(cell.short)
   end
+  -- the bank's name, only when it fits beside the last cell
+  local cells_end = (#S.BANK_CELLS[bank] * 21) + 2
+  local bname = S.COLOUR_BANKS[bank]
+  if 128 - screen.text_extents(bname) >= cells_end then
+    screen.level(3)
+    screen.move(128, 7)
+    screen.text_right(bname)
+  end
 
   screen.aa(1)
   draw_field(12, 34)
@@ -375,12 +448,13 @@ function U.colour()
   for k, side in ipairs({ "a", "b" }) do
     local p = cell[side]
     local x = (k == 1) and 0 or 66
+    local val = S.fmt(p, params:get("col_" .. p.arg))
     screen.level(5)
     screen.move(x, 55)
-    screen.text(p.name)
+    screen.text(fit(p.name, 59 - screen.text_extents(val)))
     screen.level(15)
     screen.move(x + 62, 55)
-    screen.text_right(S.fmt(p, params:get("col_" .. p.arg)))
+    screen.text_right(val)
     bar(x, 59, 62, 4, params:get_raw("col_" .. p.arg))
   end
   if byp then
@@ -481,6 +555,10 @@ function U.ctrl(btn)
     screen.level(3)
     screen.move(128, 61)
     screen.text_right("K2 clear")
+  elseif btn == "S1" and G.stack[#G.stack] == "S1" then
+    screen.level(3)
+    screen.move(128, 61)
+    screen.text_right("+step REC")
   end
 end
 
@@ -540,7 +618,7 @@ function U.lfo(i)
   screen.move(66, 63)
   screen.text("E3")
   screen.move(128, 63)
-  screen.text_right("K2/K3 shape")
+  screen.text_right("K2/3 shape")
 end
 
 -- ------------------------------------------------------------ SWING overlay
@@ -548,7 +626,8 @@ end
 function U.swing()
   local sw = params:get("swing")
   local gi = params:get("swing_grid")
-  header("SWING", "")
+  -- RAIN lives here now the launcher has no screen of its own
+  header("SWING", string.format("E1 RAIN %d%%", math.floor(params:get("rain") * 100 + 0.5)))
   screen.font_size(16)
   screen.level(15)
   screen.move(0, 30)
@@ -582,6 +661,236 @@ function U.swing()
   screen.text_right("E3 grid")
 end
 
+-- --------------------------------------------------------------- SNAP page
+--
+-- The grid's 64 cells, drawn the same way round: a square per slot.
+
+function U.snap()
+  local right
+  local deleting = N.act and N.act.kind == "delete"
+  if deleting then right = "DELETING " .. N.act.slot
+  elseif N.act and N.has(N.act.slot) then right = "OVERWRITING " .. N.act.slot
+  elseif N.act then right = "SAVING " .. N.act.slot
+  elseif N.pending then right = "ON THE BEAT > " .. N.pending.slot
+  elseif N.last > 0 then right = "LAST " .. N.last
+  else right = "SHIFT+HOLD SAVES" end
+  if G.kit then right = S.KITS[G.kit.k] .. ": PICK TRACKS" end
+  header("SNAP", right)
+  local blink = (math.floor(util.time() * 8) % 2) == 0
+  for i = 1, N.COUNT do
+    local x = 1 + (((i - 1) % 16) * 8)
+    local y = 13 + (math.floor((i - 1) / 16) * 12)
+    local lv = N.has(i) and 6 or 1
+    if i == N.last then lv = 15 end
+    if N.pending and N.pending.slot == i then lv = blink and 15 or 3 end
+    if N.has(i) or lv > 1 then
+      screen.level(lv)
+      screen.rect(x, y, 6, 9)
+      screen.fill()
+    else
+      screen.level(2)
+      screen.rect(x + 0.5, y + 0.5, 5, 8)
+      screen.stroke()
+    end
+    if deleting and N.act.slot == i then
+      -- the bar runs down as the delete hold goes on
+      local h = math.floor((1 - N.progress()) * 9 + 0.5)
+      screen.level(0)
+      screen.rect(x, y, 6, 9)
+      screen.fill()
+      screen.level(2)
+      screen.rect(x + 0.5, y + 0.5, 5, 8)
+      screen.stroke()
+      screen.level(15)
+      screen.rect(x, y + 9 - h, 6, h)
+      screen.fill()
+    elseif N.act and N.act.slot == i then
+      local h = math.floor(N.progress() * 9 + 0.5)
+      if N.has(i) then
+        -- an overwrite: the old contents blanked, a bright outline, and the
+        -- bar fills in a softer tone than a fresh save so it reads apart
+        screen.level(0)
+        screen.rect(x, y, 6, 9)
+        screen.fill()
+        screen.level(15)
+        screen.rect(x + 0.5, y + 0.5, 5, 8)
+        screen.stroke()
+        screen.level(8)
+      else
+        screen.level(15)
+      end
+      screen.rect(x, y + 9 - h, 6, h)
+      screen.fill()
+    end
+  end
+  -- each track's kit along the bottom, tracks 1-8: WA, WO or FM
+  for t = 1, S.NTRACKS do
+    local k = S.kit_of(t)
+    screen.level((G.kit and G.kit.k == k) and 15 or ((t == St.sel) and 10 or 4))
+    screen.move(4 + ((t - 1) * 16), 64)
+    screen.text_center(S.KITS[k]:sub(1, 2))
+  end
+end
+
+-- ------------------------------------------------------------ PERFORM page
+--
+-- The eight strips the way the grid has them, two to a row. A strip that is
+-- sounding is lit with the pad it is on: solid while held, dim when only
+-- latched.
+
+function U.perform()
+  local n = 0
+  for f = 1, #F.STRIPS do if F.active[f] then n = n + 1 end end
+  header("PERFORM", (n > 0) and (n .. " ON") or "SHIFT+PAD LATCHES")
+  for f, s in ipairs(F.STRIPS) do
+    local x = ((f - 1) % 2) * 65
+    local y = 11 + (math.floor((f - 1) / 2) * 13)
+    local lab = F.label(f)
+    local held = #F.held[f] > 0
+    if lab then
+      screen.level(held and 15 or 5)
+      screen.rect(x, y, 63, 11)
+      screen.fill()
+      screen.level(held and 0 or 15)
+    else
+      screen.level(2)
+      screen.rect(x + 0.5, y + 0.5, 62, 10)
+      screen.stroke()
+      screen.level(6)
+    end
+    screen.move(x + 3, y + 8)
+    screen.text(lab and fit(s.name, 54 - screen.text_extents(lab)) or s.name)
+    if lab then
+      screen.move(x + 60, y + 8)
+      screen.text_right(lab)
+    end
+  end
+end
+
+-- --------------------------------------------------------------- TAPE overlay
+--
+-- Two reels turning at the speed the loop plays at.
+
+local reel = { ang = 0, t = nil }
+
+function U.tape()
+  local pitch = params:get("tape_pitch")
+  local rate = 2 ^ (pitch / 12)
+  local now = util.time()
+  if reel.t then reel.ang = reel.ang + ((now - reel.t) * rate * 4) end
+  reel.t = now
+  header("TAPE", "held")
+  for k, cx in ipairs({ 36, 92 }) do
+    local cy = 27
+    screen.level(4)
+    screen.circle(cx, cy, 11)
+    screen.stroke()
+    screen.level(12)
+    for sp = 0, 2 do
+      local a = reel.ang + (sp * 2.0944) + (k * 0.6)
+      screen.move(cx, cy)
+      screen.line(cx + (math.cos(a) * 9), cy + (math.sin(a) * 9))
+      screen.stroke()
+    end
+  end
+  screen.level(6)
+  screen.move(36, 38.5)
+  screen.line(92, 38.5)
+  screen.stroke()
+
+  screen.level(6)
+  screen.move(0, 52)
+  screen.text("PITCH")
+  screen.move(66, 52)
+  screen.text("LENGTH")
+  screen.level(15)
+  screen.move(62, 52)
+  screen.text_right(string.format("%+d st", math.floor(pitch + 0.5)))
+  screen.move(128, 52)
+  screen.text_right(F.TAPE_LENS[params:get("tape_len")])
+  screen.level(2)
+  screen.move(0, 62)
+  screen.text("E2")
+  screen.move(66, 62)
+  screen.text("E3")
+  screen.move(128, 62)
+  screen.text_right("K2+3 reset")
+end
+
+-- --------------------------------------------------------------- REC overlay
+--
+-- The source's level across the top with the THRESH line through it (dB,
+-- -60 to 0), how far through the take below, then START LEVEL SOURCE.
+
+local function db_x(db) return math.floor(util.clamp((db + 60) / 60, 0, 1) * 126 + 0.5) end
+
+function U.rec()
+  local t = R.t
+  header(string.format("REC  %s  %d st", S.VOICES[t].name, R.steps), R.status())
+  local blink = (math.floor(util.time() * 3) % 2) == 0
+
+  -- meter, and the threshold
+  local lvl = R.level
+  local db = (lvl > 0.000001) and (20 * math.log(lvl, 10)) or -96
+  local thr = params:get("rec_thresh")
+  screen.level(2)
+  screen.rect(0.5, 12.5, 127, 7)
+  screen.stroke()
+  local w = db_x(db)
+  if w > 0 then
+    screen.level((db >= thr) and 15 or 7)
+    screen.rect(1, 13, w, 6)
+    screen.fill()
+  end
+  if R.MODES[params:get("rec_mode")] == "THRESH" then
+    local tx = 1 + db_x(thr)
+    screen.level(15)
+    screen.move(tx + 0.5, 10)
+    screen.line(tx + 0.5, 22)
+    screen.stroke()
+  end
+
+  -- the take
+  screen.level(2)
+  screen.rect(0.5, 25.5, 127, 3)
+  screen.stroke()
+  if R.eng >= 3 then
+    local pw = math.floor(((R.eng == 4) and 1 or R.prog) * 126 + 0.5)
+    if pw > 0 then
+      screen.level(12)
+      screen.rect(1, 26, pw, 2)
+      screen.fill()
+    end
+  elseif blink then
+    screen.level(6)
+    screen.rect(1, 26, 2, 2)
+    screen.fill()
+  end
+
+  local cols = {
+    { "START", R.MODES[params:get("rec_mode")], "E1" },
+    { "LEVEL", string.format("%d dB", math.floor(thr + 0.5)), "E2" },
+    { "SOURCE", R.SRCS[params:get("rec_src")], "E3" },
+  }
+  for k, c in ipairs(cols) do
+    local x = (k - 1) * 44
+    screen.level(6)
+    screen.move(x, 38)
+    screen.text(c[1])
+    screen.level(15)
+    screen.move(x, 48)
+    screen.text(c[2])
+    screen.level(2)
+    screen.move(x, 56)
+    screen.text(c[3])
+  end
+  screen.level(3)
+  screen.move(0, 63)
+  screen.text("K2 cancel")
+  screen.move(128, 63)
+  screen.text_right((R.eng == 3) and "K3 stop" or "K3 now")
+end
+
 -- ------------------------------------------------------------------- redraw
 
 function U.redraw()
@@ -591,10 +900,14 @@ function U.redraw()
   screen.font_size(8)
   screen.line_width(1)
   local kind, btn = G.overlay()
-  if kind == "ctrl" then U.ctrl(btn)
+  if kind == "tape" then U.tape()
+  elseif kind == "ctrl" then U.ctrl(btn)
+  elseif kind == "rec" then U.rec()
   elseif kind == "swing" then U.swing()
   elseif St.page == "mix" then U.mix()
   elseif St.page == "colour" then U.colour()
+  elseif St.page == "snap" then U.snap()
+  elseif St.page == "perform" then U.perform()
   else U.main() end
   screen.update()
 end
