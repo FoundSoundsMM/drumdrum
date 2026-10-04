@@ -106,6 +106,6 @@ The HISS floor (`PARAMS > ANALOG`) only plays while the sequencer runs.
 ## Development
 
 ```
-lua tools/check-lua.lua        # run the script headless
-tools/check-engine.sh          # build the engine offline
+lua lib/tools/check-lua.lua        # run the script headless
+lib/tools/check-engine.sh        # build the engine offline
 ```

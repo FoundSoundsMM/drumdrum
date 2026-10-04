@@ -1,13 +1,13 @@
 -- Smoke test for the lua side, run on a desktop with plain lua:
 --
---   lua tools/check-lua.lua
+--   lua lib/tools/check-lua.lua
 --
 -- Stubs enough of norns to actually run the script: init, a few bars of
 -- every sequencer, grid presses on all three faces, step holds with locks,
 -- LFO patching, every overlay, every page redrawn. Parsing does not catch
 -- nil fields and wrong call shapes; running does.
 
-local ROOT = (arg[0]:match("(.*)/tools/") or ".")
+local ROOT = (arg[0]:match("(.*)/lib/tools/") or ".")
 
 function include(path)
   return dofile(ROOT .. "/" .. path:gsub("^drumdrum/", "") .. ".lua")

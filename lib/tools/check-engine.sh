@@ -4,14 +4,14 @@
 # norns and no server. Catches UGen-level mistakes, not just syntax.
 #
 # With --render it then renders each voice through scsynth in NRT mode, using
-# the defaults lua actually sends (tools/dump-defaults.lua), and reports the
+# the defaults lua actually sends (lib/tools/dump-defaults.lua), and reports the
 # peak, the RMS and how long each one rings (with the strip's hiss off).
 # DD_KEEP=dir keeps the WAVs.
 set -euo pipefail
 SC=${SC:-/Applications/SuperCollider.app/Contents/MacOS/sclang}
 SCSYNTH=${SCSYNTH:-/Applications/SuperCollider.app/Contents/Resources/scsynth}
 LIB=${LIB:-/Applications/SuperCollider.app/Contents/Resources/SCClassLibrary}
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 RENDER=${1:-}
 mkdir -p "$WORK/classes"
@@ -36,7 +36,7 @@ excludePaths:
 postInlineWarnings: false
 CONF
 
-lua "$ROOT/tools/dump-defaults.lua" ${DD_KIT:+kit=$DD_KIT} ${OVERRIDES:-} > "$WORK/defaults.txt"
+lua "$ROOT/lib/tools/dump-defaults.lua" ${DD_KIT:+kit=$DD_KIT} ${OVERRIDES:-} > "$WORK/defaults.txt"
 
 cat > "$WORK/run.scd" <<'RUN'
 var n = 0, bad = 0, dir = thisProcess.argv[0], render = thisProcess.argv[1] == "render";
@@ -160,7 +160,7 @@ if [ "$RENDER" = "--render" ]; then
     # a synth the server refuses (too many wire buffers, say) renders silence
     grep -iE "fail|exceed|error" "$WORK/$name.log" | sort -u | sed "s/^/$name: /" || true
   done
-  python3 "$ROOT/tools/measure.py" "$WORK"/*.wav
+  python3 "$ROOT/lib/tools/measure.py" "$WORK"/*.wav
   # DD_KEEP=dir keeps the renders, e.g. to compare against reference hits
   if [ -n "${DD_KEEP:-}" ]; then mkdir -p "$DD_KEEP"; cp "$WORK"/*.wav "$DD_KEEP"/; fi
 fi
@@ -176,6 +176,6 @@ if [ "$RENDER" = "--demo" ]; then
   if [ $ok = 0 ] && [ ! -s "$OUT" ]; then
     echo "demo render failed"; grep -v nextOSC "$WORK/demo.log" | sort | uniq -c | sort -rn | head; exit 1
   fi
-  python3 "$ROOT/tools/measure.py" "$OUT"
+  python3 "$ROOT/lib/tools/measure.py" "$OUT"
   echo "wrote $OUT"
 fi
