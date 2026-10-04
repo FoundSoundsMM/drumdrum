@@ -1,0 +1,7 @@
+includePaths:
+  - /Applications/SuperCollider.app/Contents/Resources/SCClassLibrary
+  - /Users/michaelmanning/Documents/PROJECTS/drumdrum/work/classes
+excludePaths:
+  - /Applications/SuperCollider.app/Contents/Resources/SCClassLibrary/deprecated
+  - /Users/michaelmanning/Library/Application Support/SuperCollider/Extensions
+postInlineWarnings: false

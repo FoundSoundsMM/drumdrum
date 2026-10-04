@@ -281,7 +281,8 @@ function N.recall(i)
   local p = { slot = i, beat = beat, snap = snap, done = {} }
   N.pending = p
   p.co = clock.run(function()
-    local at = beat - LEAD
+    -- the sound has to be in before the first hit, which leads the beat
+    local at = beat - LEAD - Q.lead()
     while clock.get_beats() < at - 1e-4 do clock.sync(LEAD) end
     if N.pending ~= p then return end
     N.pending = nil

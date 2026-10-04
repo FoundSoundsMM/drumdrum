@@ -143,6 +143,12 @@ function St.push_modulated()
   end
 end
 
+-- the HISS floor is heard only while the sequencer runs
+function St.push_hiss()
+  local ok, h = pcall(function() return params:get("hiss") end)
+  engine.hiss((St.playing and ok and h) or 0)
+end
+
 -- ---------------------------------------------------------------------- hit
 
 function St.hit(t, vel, pitch, decm, mix, locks)
@@ -387,14 +393,20 @@ function St.build_params()
   params:set_action("rain", function() St.dirty = true end)
 
   -- ANALOG: how far each voice strays -- tuning, drift, hit-to-hit
-  -- variance and the VCA's bend. HISS is every strip's VCA noise floor.
+  -- variance and the VCA's bend. HISS is every strip's VCA noise floor,
+  -- only there while the sequencer runs (St.push_hiss).
   params:add_group("dd_analog", "ANALOG", 2)
   params:add_control("analog", "analog", controlspec.new(0, 1, "lin", 0, 0.5, ""),
     function(param) return math.floor(param:get() * 100 + 0.5) .. "%" end)
   params:set_action("analog", function(x) engine.analog(x) St.dirty = true end)
   params:add_control("hiss", "hiss", controlspec.new(0, 1, "lin", 0, 0.35, ""),
     function(param) return math.floor(param:get() * 100 + 0.5) .. "%" end)
-  params:set_action("hiss", function(x) engine.hiss(x) St.dirty = true end)
+  params:set_action("hiss", function() St.push_hiss() St.dirty = true end)
+
+  -- SYNC LEAD: under Link or MIDI clock every hit goes this much early, so
+  -- it is heard on the beat rather than norns' audio path late (lib/seq)
+  params:add_group("dd_sync", "SYNC", 1)
+  params:add_control("sync_lead", "sync lead", controlspec.new(0, 150, "lin", 1, 30, "ms"))
 
   params:add_group("dd_colour", "COLOUR", (#S.COLOUR * 2) + 1)
   for _, cell in ipairs(S.COLOUR) do

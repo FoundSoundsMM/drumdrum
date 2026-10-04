@@ -52,6 +52,10 @@ local St
 
 function Q.init(state) St = state end
 
+local function transport_changed()
+  if St.push_hiss then St.push_hiss() end
+end
+
 -- --------------------------------------------------------------- conditions
 --
 -- Elektron's set. A:B fires on the A-th of every B passes of the pattern.
@@ -229,6 +233,42 @@ end
 
 local EPS = 1e-6
 
+-- SYNC LEAD. Under Link or MIDI the beat is the other machine's, and it
+-- plays its own audio so that it is HEARD on the beat. norns does not: a hit
+-- fired on the beat comes out of the jack a few buffers later (the audio
+-- interface, scsynth's block, the trip from lua to the engine). So under an
+-- external clock every hit is placed this many milliseconds early. The
+-- internal clock has nothing to line up with, and leads by nothing.
+local INTERNAL, MIDI, LINK = 1, 2, 3
+
+local function source()
+  local ok, v = pcall(function() return params:get("clock_source") end)
+  return ok and v or INTERNAL
+end
+
+-- the lead, in beats at the current tempo
+function Q.lead()
+  local src = source()
+  if src ~= LINK and src ~= MIDI then return 0 end
+  local ok, ms = pcall(function() return params:get("sync_lead") end)
+  if not ok or not ms or ms <= 0 then return 0 end
+  return (ms / 1000) / clock.get_beat_sec()
+end
+
+-- inside a clock coroutine: wait for the next line of n far enough off to
+-- be early for, wake the lead before it, and return that line
+function Q.wait_line(n)
+  local lead = Q.lead()
+  if lead <= 0 then
+    clock.sync(n)
+    return math.floor(clock.get_beats() + 0.5)
+  end
+  local now = clock.get_beats()
+  local line = (math.floor(((now + lead) / n) + EPS) + 1) * n
+  clock.sleep((line - lead - now) * clock.get_beat_sec())
+  return line
+end
+
 Q.ids = {}
 Q.gen = 0        -- bumped on every start and stop: anything already scheduled
                  -- from an older run sees a different number and drops out
@@ -276,7 +316,7 @@ function Q.tick(t, b, div, gen)
   -- RAIN only falls where the track itself is silent (see lib/clips)
   if not h and Q.rain then h = Q.rain(t) end
 
-  local at = b + Q.swing_delay(b)
+  local at = b + Q.swing_delay(b) - Q.lead()
   local nudge = h and ((h.nudge + dilla(t, tr, b, div)) * div) or 0
   -- the playhead moves with the line, so it lands when the beat does
   place(at, div, gen, function()
@@ -289,17 +329,20 @@ function Q.tick(t, b, div, gen)
   end
 end
 
--- one track, from line a. The pulse for a is due now; after that the
+-- one track, from line a. The pulse for a is due now (or, with a SYNC
+-- LEAD, the lead before a: place() waits for it either way); after that the
 -- coroutine stays one line ahead of what you hear, which is the room an
--- early nudge needs.
+-- early nudge and the lead need.
 local function loop(t, gen, a)
   local tr = St.tracks[t]
-  -- a Link start can arrive a moment before its beat 0
-  if a - clock.get_beats() > 0.001 then clock.sync(speed(tr)) end
   Q.tick(t, a, speed(tr), gen)
   local b = a
   while gen == Q.gen do
     local div = speed(tr)
+    -- started early (a Link start a moment before its beat 0, a join a
+    -- lead before its bar): be on line b before preparing the one after
+    if b - clock.get_beats() > 0.001 then clock.sync(div) end
+    if gen ~= Q.gen then return end
     local nb = line_after(b, div)
     Q.tick(t, nb, div, gen)
     clock.sync(div)
@@ -320,6 +363,7 @@ end
 function Q.halt()
   Q.gen = Q.gen + 1
   St.playing = false
+  transport_changed()
   for t = 1, S.NTRACKS do
     if Q.ids[t] then clock.cancel(Q.ids[t]) end
     Q.ids[t] = nil
@@ -334,6 +378,7 @@ end
 function Q.start(a)
   Q.halt()
   St.playing = true
+  transport_changed()
   local gen = Q.gen
   for t = 1, S.NTRACKS do
     Q.ids[t] = clock.run(loop, t, gen, a)
@@ -363,13 +408,6 @@ end
 -- already rolling sent its START before we existed -- so PLAY and STOP here
 -- always work, whatever the source.
 
-local INTERNAL, MIDI, LINK = 1, 2, 3
-
-local function source()
-  local ok, v = pcall(function() return params:get("clock_source") end)
-  return ok and v or INTERNAL
-end
-
 local function link_sync()
   local ok, v = pcall(function() return params:get("link_start_stop_sync") end)
   return ok and v == 2
@@ -383,17 +421,19 @@ function Q.bar()
   return 4
 end
 
--- start on the next bar line of whatever clock is running
+-- start on the next bar line of whatever clock is running, the SYNC LEAD
+-- early so that the first hit is not late
 function Q.join()
   Q.halt()
   St.playing = true   -- PLAY lights while it waits
+  transport_changed()
   local gen = Q.gen
   local n = Q.bar()
   Q.waiter = clock.run(function()
-    clock.sync(n)
+    local line = Q.wait_line(n)
     if gen ~= Q.gen then return end
     Q.waiter = nil
-    Q.start(math.floor(clock.get_beats() + 0.5))
+    Q.start(line)
   end)
   St.dirty = true
 end
@@ -402,6 +442,7 @@ end
 local function ask(f)
   Q.halt()
   St.playing = true
+  transport_changed()
   local gen = Q.gen
   if not pcall(f) then return Q.join() end
   Q.waiter = clock.run(function()

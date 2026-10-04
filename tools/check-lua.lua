@@ -344,7 +344,17 @@ assert(math.abs(first_trig(1)) <= TOL, "internal: step 1 not on beat 0: " .. tos
 local ok, e = all_on_grid(0.25)
 assert(ok, e and ("internal: trig off the grid at beat " .. e.beat))
 
--- MIDI clock, DAW already rolling: PLAY joins on the next bar line
+-- the HISS floor is only there while playing
+assert(last.hiss and last.hiss[1] > 0, "no hiss while playing")
+tap(2, 8)
+assert(last.hiss[1] == 0, "hiss left on when stopped")
+tap(1, 8)
+assert(last.hiss[1] > 0, "hiss not back on PLAY")
+pump(4)
+
+-- MIDI clock, DAW already rolling: PLAY joins on the next bar line (with
+-- no SYNC LEAD here; it has its own test below)
+params:set("sync_lead", 0)
 params:set("clock_source", 2)
 tap(2, 8)
 assert(not St.playing)
@@ -391,6 +401,23 @@ assert(math.abs(got[2] - (1.5 - 0.0625)) <= TOL, "early nudge: " .. tostring(got
 assert(math.abs(got[3] - (2.5 + 0.1)) <= TOL, "late nudge: " .. tostring(got[3]))
 St.tracks[1].steps[7].nudge = 0
 St.tracks[1].steps[11].nudge = 0
+
+-- SYNC LEAD under an external clock: every hit exactly that much early,
+-- the joined bar's first hit included
+params:set("sync_lead", 30)
+tap(2, 8)
+beats = 41.3
+trig_log = {}
+tap(1, 8)
+pump(16)
+local lead = 0.030 / BS
+assert(math.abs(first_trig(1) - (44 - lead)) <= TOL, "lead join: " .. tostring(first_trig(1)))
+for _, e in ipairs(trig_log) do
+  assert(off_grid(e.beat + lead, 0.25) <= TOL, "lead: hit not a lead early at beat " .. e.beat)
+end
+-- the internal clock leads by nothing
+params:set("clock_source", 1)
+assert(dd.seq.lead() == 0, "internal clock should not lead")
 
 params:set("clock_source", 1)
 pump(64)

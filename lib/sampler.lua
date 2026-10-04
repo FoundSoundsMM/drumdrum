@@ -120,7 +120,9 @@ local function start_mode()
   elseif St.playing and not Q.waiter then
     -- playing: on the next bar line
     R.waiting = clock.run(function()
-      clock.sync(Q.bar())
+      -- with the hits, the SYNC LEAD early: a track or the MIX as a source
+      -- would otherwise lose the bar's first attack
+      Q.wait_line(Q.bar())
       R.waiting = nil
       if R.t and not R.busy() then R.go() end
     end)

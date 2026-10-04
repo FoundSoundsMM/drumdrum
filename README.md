@@ -95,6 +95,14 @@ SHIFT is **K2** on norns. CLEAR is grid row 8, column 14.
 
 drumdrum follows norns' clock settings: internal, MIDI, Link or crow.
 
+Under Link or MIDI clock, every hit is sent early by `PARAMS > SYNC > sync
+lead` (30 ms by default) to make up for the delay in norns' audio output. To
+set it, record a kick into your DAW. If it lands late, raise the lead by
+that many milliseconds; if early, lower it. LOSS on the COLOUR page adds
+about 9 ms of delay while it's above zero.
+
+The HISS floor (`PARAMS > ANALOG`) only plays while the sequencer runs.
+
 ## Development
 
 ```
