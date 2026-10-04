@@ -878,7 +878,7 @@ Engine_DrumDrum : CroneEngine {
 		// the slap: the deck's edge, a papery knock with a little low thud
 		var senv = EnvGen.ar(Env.perc(0.001, 0.04));
 		var snp = ((BPF.ar(n, (f * 0.4).clip(200, 6000), 1) * 4)
-			+ (Ringz.ar(Decay2.ar(Impulse.ar(0), 0.001, 0.004), 190, 0.06) * 0.03)) * senv.sqrt * snap;
+			+ (Ringz.ar(Decay2.ar(Impulse.ar(0), 0.001, 0.004), 190, 0.06) * 0.03)) * senv * snap;
 		var sig = LPF.ar(LPF.ar(flick + bed + snp, (f * 1.8).clip(1500, 14000)), 9000);
 		^[sig * lvl, win.max(senv), dec]
 	}
@@ -1021,6 +1021,11 @@ Engine_DrumDrum : CroneEngine {
 			// audio rate: a control-rate gate ramps up across the first block
 			// (64 samples, 1.3 ms), which ate the front of every attack
 			sig = sig * EnvGen.ar(Env.asr(0, 1, 0.012), gate, doneAction: 2);
+			// a bad sample (NaN, inf, denormal) goes out as silence: one that
+			// got into a strip would wedge its filters and, through the
+			// returns and COLOUR, mute everything until a restart. It also
+			// lets the silence detector free a voice that went bad.
+			sig = Select.ar(CheckBadValues.ar(sig, 0, 0) > 0, [sig, DC.ar(0)]);
 			DetectSilence.ar(sig.abs.max(Line.ar(1, 0, hold)), 0.0002, 0.12, doneAction: 2);
 			Out.ar(out, sig);
 		}).add;
@@ -1065,6 +1070,9 @@ Engine_DrumDrum : CroneEngine {
 			var sig = In.ar(in, 1);
 			var dr = Lag.kr(drive, lagt), wm = Lag.kr(warmth, lagt), tl = Lag.kr(tilt, lagt);
 			var dgain, dx, dy, mk, amp, st, dk, mt, hs;
+			// the voices already guard their own output; this catches anything
+			// else on the bus before it can wedge the filters below
+			sig = Select.ar(CheckBadValues.ar(sig, 0, 0) > 0, [sig, DC.ar(0)]);
 
 			// DRIFT, for this track's voices to read, in semitones: a slow
 			// wander like a circuit warming and cooling, a little faster
