@@ -358,7 +358,7 @@ Engine_DrumDrum : CroneEngine {
 	// ------------------------------------------------------------ WOOD kit
 	//
 	// Wooden, organic percussion: a cajon, a slit log, clappers, a wood
-	// block, a balafon, a shaker and a rainstick. What makes them wood
+	// block, a balafon, a shaker and a string of seed pods. What makes them wood
 	// rather than metal or skin:
 	//   damping   wood loses its high frequencies fast. Every mode here
 	//             dies sooner the higher it sits, by WOOD: 0 is green, damp
@@ -533,43 +533,58 @@ Engine_DrumDrum : CroneEngine {
 		^[((bar * 0.7) + (air * 0.5) + (rattle * buzz)).tanh * lvl * 0.7, env, 0.001]
 	}
 
-	// HAT: a shaker, seeds in a gourd, after Perry Cook's PhISEM. A shake
-	// is energy rising over ATTACK and draining over DECAY; the seeds
-	// collide as often as the energy allows (BEANS is how many), each
-	// collision a click that rings the shell at PITCH and two more
-	// resonances SPREAD above it. SHELL is how much the shell rings, GRAIN
-	// how hard the seeds are: sand to dried beans.
+	// HAT: a shaker, seeds in a gourd, after Perry Cook's PhISEM. A seed
+	// hitting the wall is not a click but a little burst of noise, so every
+	// collision here is noise under its own short decay, as loud as the
+	// hit was hard. A shake throws the seeds over ATTACK, most of them land
+	// on the far wall together (the chick), and the stragglers rattle on
+	// over DECAY, as often as the energy left allows (BEANS is how many).
+	// GRAIN is the seeds: sand (fine, short, bright) to beans (fewer,
+	// longer, with body). The shell is three broad resonances at PITCH and
+	// SPREAD above it, SHELL how much it colours them: a plastic egg at 0,
+	// a gourd at 1. Broad, so the seeds never ping.
 	*shaker { arg t, pr, decm, g;
 		var freq = t[0] * pr * (1 + (g * 0.1)), dec = t[1] * decm;
 		var beans = t[2], shell = t[3], spread = t[4], atk = t[5], grain = t[6], lvl = t[7];
-		var env = EnvGen.ar(Env([0, 1, 0], [atk, dec], [2, -4]));
-		var coll = Dust2.ar((30 * (60 ** beans)) * env);
-		var click = Decay.ar(coll, 0.00015 + ((1 - grain) * 0.0008));
-		var rq = 0.5 * (0.06 ** shell);
-		var sig = [1, 1 + (spread * 0.6), 1 + (spread * 1.5)].collect({ |r, k|
-			Resonz.ar(click, (freq * r).clip(500, 17000), rq) * (1 - (k * 0.25))
-		}).inject(0, { |a, b| a + b }) * rq.reciprocal.sqrt * 4;
-		sig = sig + (HPF.ar(click, 6000) * grain * 2);
-		^[sig * lvl * 0.85, env, atk]
+		var env = EnvGen.ar(Env([0, 1, 0], [atk, dec], [2, -5]));
+		var chick = EnvGen.ar(Env([0, 0, 1, 0], [atk, 0.0005, 0.006 + (grain * 0.012)], [0, 0, -6]));
+		var rate = (60 * (40 ** beans)) * env;
+		var fine = Decay.ar(Dust.ar(rate), 0.00025 + (grain * 0.0004)) * WhiteNoise.ar;
+		var big = Decay.ar(Dust.ar(rate * grain * 0.3), 0.0008 + (grain * 0.0015)) * WhiteNoise.ar;
+		var hits = (HPF.ar(fine, 2500) * (1 - (grain * 0.4)))
+			+ (LPF.ar(big, freq * 1.5) * grain * 1.4)
+			+ (HPF.ar(WhiteNoise.ar, 1500) * chick * (0.25 + (beans * 0.35)));
+		var rq = 1.4 * (0.12 ** shell);
+		var body = [1, 1 + (spread * 0.6), 1 + (spread * 1.5)].collect({ |r, k|
+			BPF.ar(hits, (freq * r).clip(400, 16000), rq) * (1 - (k * 0.3))
+		}).inject(0, { |a, b| a + b }) * (rq.reciprocal.sqrt * 0.9);
+		var sig = (body * (0.35 + (shell * 0.65))) + (HPF.ar(hits, freq) * (1 - shell) * 0.7);
+		^[sig * lvl * 5, env, atk]
 	}
 
-	// CYM: a rainstick: pebbles falling down a cactus tube over DECAY, each
-	// one ticking a spine at its own pitch somewhere around PITCH (SPREAD
-	// is how far apart). DENSITY is how many pebbles, RING how long a spine
-	// rings, TUBE the hollow of the tube under them, SWELL the tilt that
-	// starts them falling.
+	// CYM: dried seed pods on a string, shaken. A pod knocking another is
+	// a hollow tick, a burst of noise rung briefly somewhere around PITCH
+	// (SPREAD is how far apart the pods are), and the seeds inside rattle
+	// after it as a hiss of fine grains (SEEDS). DENSITY is how many pods.
+	// The hand swings back and forth (SHAKE: 0 a smooth pour, up to a
+	// chk-chk-chk), SWELL is how long it takes to get going and DECAY how
+	// long it rattles on.
 	*rainstick { arg t, pr, decm, g;
 		var freq = t[0] * pr * (1 + (g * 0.08)), dec = t[1] * decm;
-		var dens = t[2], spread = t[3], tube = t[4], ring = t[5], swell = t[6], lvl = t[7];
-		var env = EnvGen.ar(Env([0, 1, 0], [swell, dec], [2, -3]));
-		var rate = (20 * (40 ** dens)) * env / 3;
-		var sig = 3.collect({ |k|
-			var d = Dust.ar(rate);
-			var fr = TRand.ar(freq * (1 - (spread * 0.5)), freq * (1 + (spread * 1.5)), d);
-			Ringz.ar(d * TRand.ar(0.2, 1, d), fr, 0.004 + (ring * 0.04))
+		var dens = t[2], spread = t[3], seeds = t[4], shake = t[5], swell = t[6], lvl = t[7];
+		var env = EnvGen.ar(Env([0, 1, 0], [swell, dec], [2, -4]));
+		var hrate = Rand(5, 6.5) * (1 + (LFNoise1.kr(1.3) * 0.1));
+		var swing = (SinOsc.ar(hrate, 0.5pi) * 0.5 + 0.5) ** 3;
+		var act = env * ((1 - shake) + (shake * swing * 1.8));
+		var rate = (50 * (40 ** dens)) * act;
+		var pods = 3.collect({ |k|
+			var d = Dust.ar(rate / 3);
+			var fr = TRand.ar(freq * (1 - (spread * 0.45)), freq * (1 + spread), d);
+			var burst = Decay.ar(d, 0.0006) * WhiteNoise.ar;
+			(Ringz.ar(burst, fr, 0.003) * 0.08) + (BPF.ar(burst, fr, 0.8) * 0.5)
 		}).inject(0, { |a, b| a + b });
-		var body = Resonz.ar(sig, (freq * 0.17).clip(150, 900), 0.3) * 4 * tube;
-		^[((sig * 0.5) + body) * lvl * 2, env, swell]
+		var grit = HPF.ar(Decay.ar(Dust.ar(rate * 5), 0.0002) * WhiteNoise.ar, 3500) * seeds;
+		^[(pods + grit) * lvl * 5, env, swell]
 	}
 
 	// -------------------------------------------------------------- FM kit

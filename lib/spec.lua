@@ -271,7 +271,7 @@ S.VOICES = {
 --
 --   WARM  the voices above, after the MFB Tanzbar
 --   WOOD  wooden, organic percussion: cajon, slit log, clappers, wood
---         block, balafon, shaker, rainstick
+--         block, balafon, shaker, seed pods
 --   FM    after the Yamaha YMF262 (OPL3), as ALM's Akemie's Taiko plays it:
 --         two- and four-operator FM on the chip's waveforms, ratios and
 --         rhythm mode, through its floating-point DAC
@@ -407,15 +407,15 @@ S.WOOD_VOICES = {
     },
   },
   {
-    name = "CYM", desc = "rainstick", def = "dd_wcym",
+    name = "CYM", desc = "seed pods", def = "dd_wcym",
     tone = {
-      T1 = { a = P("PITCH", 1000, 6000, "exp", 2500, "Hz"),
-             b = P("DECAY", 0.3, 6, "exp", 2.2, "s") },
+      T1 = { a = P("PITCH", 600, 6000, "exp", 1800, "Hz"),
+             b = P("DECAY", 0.1, 6, "exp", 0.9, "s") },
       T2 = { a = P("DENSITY", 0, 1, "lin", 0.5, "", { fmtf = pct }),
              b = P("SPREAD", 0, 1, "lin", 0.5, "", { fmtf = pct }) },
-      T3 = { a = P("TUBE", 0, 1, "lin", 0.3, "", { fmtf = pct }),
-             b = P("RING", 0, 1, "lin", 0.3, "", { fmtf = pct }) },
-      T4 = { a = P("SWELL", 0.001, 1.5, "exp", 0.25, "s"),
+      T3 = { a = P("SEEDS", 0, 1, "lin", 0.5, "", { fmtf = pct }),
+             b = P("SHAKE", 0, 1, "lin", 0.35, "", { fmtf = pct }) },
+      T4 = { a = P("SWELL", 0.001, 1.5, "exp", 0.04, "s"),
              b = P("LEVEL", 0, 1, "lin", 0.55, "", { fmtf = pct }) },
     },
   },
