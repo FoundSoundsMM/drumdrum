@@ -308,7 +308,7 @@ end
 -- advance track t one pulse and put that pulse on line b
 function Q.tick(t, b, div, gen)
   local tr = St.tracks[t]
-  -- a snapshot due on this line swaps the pattern in before it is read
+  -- a clip launch due on this line swaps the pattern in before it is read
   if Q.on_tick then Q.on_tick(t, b) end
   Q.advance(tr)
   local pos = tr.pos
@@ -373,19 +373,39 @@ function Q.halt()
   Q.reset()
 end
 
--- all eight tracks from line a together. a is a whole beat, so it sits on
--- every track's grid whatever its speed.
-function Q.start(a)
-  Q.halt()
-  St.playing = true
-  transport_changed()
+-- all eight tracks from step 1 on line a together, the transport left as
+-- it is. a is a whole beat, so it sits on every track's grid whatever its
+-- speed. Anything the old run already placed on or after a drops out with
+-- its generation, so a pulse a track prepared early is not heard twice.
+local function from_top(a)
+  Q.gen = Q.gen + 1
   local gen = Q.gen
+  for t = 1, S.NTRACKS do
+    if Q.ids[t] then clock.cancel(Q.ids[t]) end
+    Q.ids[t] = nil
+  end
+  Q.reset()
   for t = 1, S.NTRACKS do
     Q.ids[t] = clock.run(loop, t, gen, a)
   end
   -- step 1 is now: a sample take armed for PLAY starts here
   if Q.on_begin then Q.on_begin(a) end
   St.dirty = true
+end
+
+function Q.start(a)
+  Q.halt()
+  St.playing = true
+  transport_changed()
+  from_top(a)
+end
+
+-- back to step 1 on line a without stopping (a snapshot landing): tracks
+-- of different lengths and speeds line up again from there. Call it a
+-- little before a, as Q.start is.
+function Q.restart(a)
+  if not St.playing or Q.waiter then return end
+  from_top(a)
 end
 
 -- --------------------------------------------------------------- transport

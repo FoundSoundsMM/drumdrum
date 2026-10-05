@@ -20,18 +20,12 @@
 -- SAVING is a hold, as in Pappus: SHIFT + cell, and the cell fills as you
 -- keep holding. Let go before it is full and nothing is written.
 --
--- LOADING is a tap, and while the transport runs it lands ON THE BEAT. The
--- sequencer works one pulse ahead of what you hear (see lib/seq), so the two
--- halves of a snapshot arrive at different moments:
---
---   pattern  each track takes its new steps when it prepares the first pulse
---            at or after the target beat -- that is a pulse ahead, so the
---            beat itself already plays the new pattern
---   sound    the params go in a sixty-fourth of a beat before the target, so
---            the hit ON the beat is the first to use them
---
--- The target is the next beat far enough away for every track to still be
--- able to prepare it; a track on 1/4 needs a whole beat's notice.
+-- LOADING is a tap, and while the transport runs it lands ON THE NEXT BEAT
+-- and every track starts again from step 1 there. Tracks of different
+-- lengths and speeds drift apart as they play (that is the point of them),
+-- and a snapshot carried into wherever each one happens to be would land as
+-- a beat nobody saved. Pattern and sound go in together a sixty-fourth of a
+-- beat before it, so the hit on the beat is the first of the new snapshot.
 --
 -- Stopped, a load is immediate.
 
@@ -46,7 +40,7 @@ N.HOLD = 0.6
 N.slots = {}         -- slot -> snapshot, or nil
 N.last = 0           -- the slot loaded or saved most recently
 N.act = nil          -- a save or delete being held: { slot, t0, kind }
-N.pending = nil      -- a load waiting for its beat: { slot, beat, snap, done }
+N.pending = nil      -- a load waiting for its beat: { slot, beat, snap, co }
 N.pulse = {}         -- slot -> 0..1, a flash after a save or a load lands
 
 local LEAD = 1 / 64
@@ -241,22 +235,11 @@ end
 -- ----------------------------------------------------------------- load
 
 local function finish(p)
-  for t = 1, S.NTRACKS do
-    if not p.done[t] then apply_track(p.snap, t) end
-  end
+  for t = 1, S.NTRACKS do apply_track(p.snap, t) end
   apply_params(p.snap)
   N.last = p.slot
   N.pulse[p.slot] = 1
   St.dirty = true
-end
-
--- from Q.tick, as track t prepares the pulse on line b
-function N.on_tick(t, b)
-  local p = N.pending
-  if p and not p.done[t] and b >= p.beat - 1e-6 then
-    p.done[t] = true
-    apply_track(p.snap, t)
-  end
 end
 
 function N.recall(i)
@@ -265,28 +248,26 @@ function N.recall(i)
   if N.pending and N.pending.co then clock.cancel(N.pending.co) end
   N.pending = nil
 
-  if not St.playing then
-    finish({ slot = i, snap = snap, done = {} })
+  -- stopped, or PLAY still waiting for its bar (which starts from step 1
+  -- anyway): straight in
+  if not St.playing or Q.waiter then
+    finish({ slot = i, snap = snap })
     return
   end
 
-  -- the next beat every track can still get ready for
-  local margin = 0
-  for _, tr in ipairs(St.tracks) do
-    margin = math.max(margin, S.SPEED_BEATS[tr.speed] or 0.25)
-  end
-  local now = clock.get_beats()
-  local beat = math.floor(now + margin + 1e-6) + 1
+  -- the next beat there is still time to get in ahead of
+  local beat = math.floor(clock.get_beats() + LEAD + Q.lead() + 1e-6) + 1
 
-  local p = { slot = i, beat = beat, snap = snap, done = {} }
+  local p = { slot = i, beat = beat, snap = snap }
   N.pending = p
   p.co = clock.run(function()
-    -- the sound has to be in before the first hit, which leads the beat
+    -- in before the first hit, which leads the beat by the SYNC LEAD
     local at = beat - LEAD - Q.lead()
     while clock.get_beats() < at - 1e-4 do clock.sync(LEAD) end
     if N.pending ~= p then return end
     N.pending = nil
     finish(p)
+    Q.restart(beat)
   end)
   St.dirty = true
 end

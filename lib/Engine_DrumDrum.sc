@@ -451,7 +451,7 @@ Engine_DrumDrum : CroneEngine {
 		var sp = t[2].max(0.001), cnt = t[3], crack = t[4], size = t[5], wood = t[6], lvl = t[7];
 		var t0 = Impulse.ar(0);
 		var hits = Mix.fill(6, { |k|
-			DelayN.ar(t0, 0.2, sp * k * (1 + (Rand(-0.25, 0.25) * \an.kr(0.5) * k.sign)))
+			TDelay.ar(t0, (sp * k * (1 + (Rand(-0.25, 0.25) * \an.kr(0.5) * k.sign))).min(0.2))
 				* (cnt > k) * (1 - (k * 0.12)) * (1 + (Rand(-0.2, 0.2) * k.sign))
 		});
 		var exc = LPF.ar(hits, 9000 - (size * 6000)) * 2;
@@ -677,10 +677,10 @@ Engine_DrumDrum : CroneEngine {
 		var sp = t[2].max(0.002), cnt = t[3], fm = t[4], ratio = Engine_DrumDrum.mult(t[5]), wave = t[6], lvl = t[7];
 		var t0 = Impulse.ar(0);
 		var bursts = Mix.fill(6, { |k|
-			Decay2.ar(DelayN.ar(t0, 0.2, sp * k * (1 + (Rand(-0.18, 0.18) * \an.kr(0.5) * k.sign))),
+			Decay2.ar(TDelay.ar(t0, (sp * k * (1 + (Rand(-0.18, 0.18) * \an.kr(0.5) * k.sign))).min(0.2)),
 				0.0004, sp * 0.85) * ((cnt - 1) > k) * (1 - (k * 0.07))
 		});
-		var tail = Decay2.ar(DelayN.ar(t0, 0.2, sp * (cnt - 1)), 0.001, dec);
+		var tail = Decay2.ar(TDelay.ar(t0, (sp * (cnt - 1)).min(0.2)), 0.001, dec);
 		var env = (bursts + tail).min(1);
 		var f = (freq * (1 + (g * 0.3))).clip(100, 12000);
 		var mod = SinOscFB.ar(f * ratio, 1.2 + (fm * 0.6));
@@ -821,7 +821,7 @@ Engine_DrumDrum : CroneEngine {
 		var freq = t[0] * pr, dec = t[1] * decm;
 		var dub = t[2], gap = t[3], soft = t[4], grit = t[5], tone = t[6], lvl = t[7];
 		var t0 = Impulse.ar(0);
-		var t1 = DelayN.ar(t0, 0.5, gap.clip(0.01, 0.5)) * dub;
+		var t1 = TDelay.ar(t0, gap.clip(0.01, 0.5)) * dub;
 		var w = 0.003 + (soft * 0.02);
 		var n = 1 + LPF.ar(PinkNoise.ar, 900);
 		var lub = Ringz.ar(n * Decay2.ar(t0, w * 0.3, w) / (0.7 * w * SampleRate.ir),
@@ -1394,7 +1394,10 @@ Engine_DrumDrum : CroneEngine {
 			chorus = 0, chrate = 0.5, chdepth = 0.5, chbbd = 0.3,
 			outlvl = 1, bypass = 0|
 			var lagt = 0.08, envref = 0.25;
-			var dry = In.ar(in, 2);
+			// the strips guard their own inputs, but the returns and the
+			// punch-ins land on this bus after them: a bad value here would
+			// wedge every filter below for good
+			var dry = In.ar(in, 2).collect { |c| Select.ar(CheckBadValues.ar(c, 0, 0) > 0, [c, DC.ar(0)]) };
 			var sig = dry;
 			var dr = Lag.kr(drive, lagt), cn = Lag.kr(crunch, lagt), tr = Lag.kr(trans, lagt);
 			var cp = Lag.kr(comp, lagt), bm = Lag.kr(boom, lagt), bmix = Lag.kr(bussmix, lagt);
@@ -1562,6 +1565,10 @@ Engine_DrumDrum : CroneEngine {
 			// a safety, not a sound: Limiter delays by twice its window, so a
 			// 1 ms window keeps it to 2 ms (10 ms was 20 ms late)
 			outsig = Limiter.ar(outsig, 0.95, 0.001);
+			// and the last word before norns' own mixer: one NaN out of here
+			// lodges in its reverb and compressor, which outlive the script,
+			// and nothing makes a sound again until norns restarts
+			outsig = outsig.collect { |c| Select.ar(CheckBadValues.ar(c, 0, 0) > 0, [c, DC.ar(0)]) };
 			Out.kr(ampBus, Amplitude.kr((outsig[0] + outsig[1]) * 0.5, 0.01, 0.2));
 			Out.ar(out, outsig);
 		}).add;

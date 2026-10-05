@@ -700,19 +700,32 @@ local saved_steps, saved_level = 0, params:get("t1_level")
 for _ in pairs(St.tracks[1].steps) do saved_steps = saved_steps + 1 end
 St.tracks[1].steps = {}
 params:set("t1_level", 0.1)
-St.tracks[4].speed = 6   -- a 1/4 track needs a whole beat's notice
+St.tracks[4].speed = 6
 local tapped_at = clock.get_beats()
 tap(3, 1)
 local p = N.pending
-assert(p and p.beat == math.floor(p.beat) and p.beat - tapped_at > 1, "load not aimed at a beat")
-local applied_at
+assert(p and p.beat == math.floor(p.beat) and p.beat > tapped_at, "load not aimed at a beat")
+local applied_at, restarted
 local orig_set = params.set
 params.set = function(self, id, v)
   if id == "t1_level" and not applied_at then applied_at = clock.get_beats() end
   return orig_set(self, id, v)
 end
+local orig_restart = dd.seq.restart
+dd.seq.restart = function(a)
+  restarted = a
+  orig_restart(a)
+  -- every track back to the top, whatever its length and speed: its
+  -- first pulse (step 1, on the beat) is already prepared
+  for t = 1, S.NTRACKS do
+    local tr = St.tracks[t]
+    assert(tr.pos == 1 and tr.pulse == 1 and tr.loop == 0, "track " .. t .. " not back at the top")
+  end
+end
 pump(16)
 params.set = orig_set
+dd.seq.restart = orig_restart
+assert(restarted == p.beat, "the sequencer did not restart on the load's beat")
 assert(N.pending == nil and N.last == 3, "load never landed")
 assert(applied_at and math.abs(applied_at - (p.beat - 1 / 64)) < 0.01,
   "sound not loaded just before the beat: " .. tostring(applied_at) .. " vs " .. p.beat)

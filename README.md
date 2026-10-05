@@ -76,7 +76,8 @@ SHIFT is **K2** on norns. CLEAR is grid row 8, column 14.
   spring reverb. E1 picks a setting. On the grid, the seven buttons above
   each track button are its clip slots. Row 7 columns 1-2 change the bank
   and column 16 is BYPASS.
-- **SNAP:** 64 snapshots. Tap one to load it on the next beat, SHIFT + hold
+- **SNAP:** 64 snapshots. Tap one to load it on the next beat (every track
+  restarts from step 1 there), SHIFT + hold
   to save. Row 7 columns 1-4 pick the kit: tap one for every track, or hold
   it and press track buttons.
 - **PERFORM:** 64 punch-in effects. Hold a pad to play it, SHIFT + pad to

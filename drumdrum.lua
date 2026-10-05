@@ -247,11 +247,7 @@ function init()
   St.clips = C
   N.init(St, Q, L, C)
   F.init(St)
-  -- a snapshot first: one landing on this line replaces the clips as well
-  Q.on_tick = function(t, b)
-    N.on_tick(t, b)
-    C.on_tick(t, b)
-  end
+  Q.on_tick = C.on_tick
   Q.on_halt = C.on_stop
   R.init(St, Q)
   Q.on_begin = R.on_begin
