@@ -17,9 +17,9 @@ The tracks are BD1, BD2, CLP, SNR, PRC1, PRC2, HAT and CYM. Each one can use
 any kit:
 
 - **WARM**: after the MFB Tanzbar
-- **WOOD**: cajon, slit log, wood block, balafon, shaker
+- **WOOD**: cajon, tabla, wood block, balafon, shaker, cymbal
 - **FM**: after the OPL3 chip
-- **GLITCH**: soft noise-built hits, after Matmos
+- **ADD**: additive sine-partial drums, after Autechre
 
 ## Grid
 

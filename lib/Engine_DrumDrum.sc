@@ -62,7 +62,7 @@ Engine_DrumDrum : CroneEngine {
 	var <tails;      // punch-ins let go of but still ringing out
 	var mlast, mtime = 0;
 	var analog = 0.5;
-	var <kits;       // per track: 0 WARM, 1 WOOD, 2 FM, 3 GLITCH
+	var <kits;       // per track: 0 WARM, 1 WOOD, 2 FM, 3 ADD
 	// the SAMPLER: a ring the armed recorder writes, and where a take is.
 	// sState: 0 off, 1 armed (lua will say when), 2 listening for a hit,
 	// 3 recording, 4 writing the file. sDone counts finished takes.
@@ -70,12 +70,12 @@ Engine_DrumDrum : CroneEngine {
 	var sState = 0, sDone = 0, sStart = 0, sT0 = 0, sDur = 1, sGen = 0, sPath = "";
 
 	*initClass {
-		// per kit, per track: WARM, WOOD, FM, GLITCH
+		// per kit, per track: WARM, WOOD, FM, ADD
 		defs = [
 			[\dd_bd1, \dd_bd2, \dd_clp, \dd_snr, \dd_prc1, \dd_prc2, \dd_hat, \dd_cym],
 			[\dd_wbd1, \dd_wbd2, \dd_wclp, \dd_wsnr, \dd_wprc1, \dd_wprc2, \dd_what, \dd_wcym],
 			[\dd_fbd1, \dd_fbd2, \dd_fclp, \dd_fsnr, \dd_fprc1, \dd_fprc2, \dd_fhat, \dd_fcym],
-			[\dd_gbd1, \dd_gbd2, \dd_gclp, \dd_gsnr, \dd_gprc1, \dd_gprc2, \dd_ghat, \dd_gcym]
+			[\dd_abd1, \dd_abd2, \dd_aclp, \dd_asnr, \dd_aprc1, \dd_aprc2, \dd_ahat, \dd_acym]
 		];
 		// a choked voice cuts the one before it; the rest overlap, up to six
 		chokes = [1, 1, 0, 1, 0, 0, 1, 0];
@@ -357,8 +357,8 @@ Engine_DrumDrum : CroneEngine {
 
 	// ------------------------------------------------------------ WOOD kit
 	//
-	// Wooden, organic percussion: a cajon, a slit log, clappers, a wood
-	// block, a balafon, a shaker and a string of seed pods. What makes them wood
+	// Wooden, organic percussion: a cajon, a tabla (bayan, tete, dayan), a
+	// wood block, a balafon, a shaker and a cymbal. What makes them wood
 	// rather than metal or skin:
 	//   damping   wood loses its high frequencies fast. Every mode here
 	//             dies sooner the higher it sits, by WOOD: 0 is green, damp
@@ -424,62 +424,78 @@ Engine_DrumDrum : CroneEngine {
 		^[(sig * 1.2).tanh * lvl * 1.5, env, 0.002]
 	}
 
-	// BD2: a slit log drum, a tongue of the log struck with a soft mallet.
-	// TONGUE stretches its modes, wider for a long thin tongue; HOLLOW is
-	// the log's air ringing under it; BEND the mallet pressing the tongue
-	// down for a moment, so it starts a little sharp.
-	*slitlog { arg t, pr, decm, g;
-		var freq = t[0] * pr * (1 + (g * 0.2)), dec = t[1] * decm;
-		var mallet = t[2], tongue = t[3], hollow = t[4], bend = t[5], wood = t[6], lvl = t[7];
-		var exc = Engine_DrumDrum.knock(mallet * 0.7);
-		var b = EnvGen.kr(Env([1 + (bend * 0.12), 1], [0.06], -4));
-		var ratios = [1, 2.76, 4.1, 5.4, 7.2].collect { |r| 1 + ((r - 1) * (0.7 + (tongue * 0.6))) };
-		var tng = Engine_DrumDrum.wmodes(exc, freq * b, ratios, [1, 0.45, 0.3, 0.2, 0.12], dec,
-			Engine_DrumDrum.damp(wood));
-		var air = (Ringz.ar(exc, freq * 0.985, dec * 1.3) * 0.7) + (Resonz.ar(tng, freq * 1.52, 0.25) * 1.5);
-		var env = EnvGen.ar(Env.perc(0.001, dec, 1, -4));
-		var sig = (tng * (1 - (hollow * 0.4))) + (air * hollow);
-		^[(sig * 1.1).tanh * lvl * 0.8, env, 0.002]
+	// The tabla. Its skins carry the syahi, a disc of paste that loads the
+	// middle of the skin until its modes fall into a harmonic series: that
+	// is why a tabla sings a note where any other drum thuds. The dayan
+	// (treble) is tuned and nearly harmonic, the bayan (bass) looser, and
+	// bent by the heel of the palm. A stroke is a fingertip flicked off the
+	// skin (open, it rings) or left on it (closed, it only taps).
+
+	// a stroke of contact C seconds at every impulse in HITS, unit area as
+	// *strike is
+	*strikes { arg hits, c; ^Decay2.ar(hits, c * 0.25, c) * (6.9 / (c * 0.75 * SampleRate.ir)) }
+
+	// BD2: the bayan. FINGER is how sharp the stroke, from the soft pad of
+	// the fingers to the tips. Then the heel of the palm presses into the
+	// skin and slides, so the note rises (the ghe's gamak): PRESS is how far,
+	// up to eight semitones, GLIDE how slowly. FLAT lays the whole palm on
+	// it: the ka, a dry slap that chokes the skin.
+	*bayan { arg t, pr, decm, g;
+		var freq = t[0] * pr * (1 + (g * 0.15)), dec = t[1] * decm;
+		var finger = t[2], press = t[3], glide = t[4], flat = t[5], wood = t[6], lvl = t[7];
+		var exc = Engine_DrumDrum.knock(finger * 0.6);
+		var bend = EnvGen.kr(Env([1.03, 1, (press * 8).midiratio], [0.012, 0.03 * (20 ** glide)], [-3, -2]));
+		var d = dec * (1 - (flat * 0.85));
+		var skin = Engine_DrumDrum.wmodes(exc, freq * bend, [1, 2, 2.92, 3.85, 4.9],
+			[1, 0.3, 0.16, 0.09, 0.05], d, Engine_DrumDrum.damp(wood));
+		var ka = ((LPF.ar(WhiteNoise.ar, 900) * EnvGen.ar(Env.perc(0.0005, 0.03)) * 0.6)
+			+ (Ringz.ar(exc, freq * 1.6, 0.03) * 0.3)) * flat;
+		var env = EnvGen.ar(Env.perc(0.001, d, 1, -4));
+		^[((skin + ka) * 1.2).tanh * lvl * 0.9, env, 0.002]
 	}
 
-	// CLP: clappers, two boards slapped together. They never meet flat, so
-	// a slap is GRAINS knocks SPREAD apart, unevenly, each ringing the
-	// boards at TONE; CRACK is the air squeezed out between them, SIZE the
-	// boards, bigger ones lower and rounder.
-	*clapper { arg t, pr, decm, g;
-		var freq = t[0] * pr * (1 + (g * 0.3)), dec = t[1] * decm;
-		var sp = t[2].max(0.001), cnt = t[3], crack = t[4], size = t[5], wood = t[6], lvl = t[7];
-		var t0 = Impulse.ar(0);
-		var hits = Mix.fill(6, { |k|
-			TDelay.ar(t0, (sp * k * (1 + (Rand(-0.25, 0.25) * \an.kr(0.5) * k.sign))).min(0.2))
-				* (cnt > k) * (1 - (k * 0.12)) * (1 + (Rand(-0.2, 0.2) * k.sign))
+	// CLP: tete, the quick closed strokes of a tabla roll (ti-ra-ki-ta):
+	// STROKES of them SPREAD apart, the fingers left on the dayan so it
+	// only taps at PITCH, every other one a ka on the bayan instead, by KA.
+	// THUD is the skin under the fingers against the note ringing through.
+	*tete { arg t, pr, decm, g;
+		var freq = t[0] * pr * (1 + (g * 0.15)), dec = t[1] * decm;
+		var sp = t[2].max(0.001), cnt = t[3], ka = t[4], thud = t[5], wood = t[6], lvl = t[7];
+		var t0 = Impulse.ar(0), an = \an.kr(0.5);
+		var trig = 6.collect({ |k|
+			TDelay.ar(t0, (sp * k * (1 + (Rand(-0.15, 0.15) * an * k.sign))).min(0.6)) * (cnt > k)
+				* (1 - (k * 0.07)) * (1 + (Rand(-0.2, 0.2) * an * k.sign))
 		});
-		var exc = LPF.ar(hits, 9000 - (size * 6000)) * 2;
-		var boards = Engine_DrumDrum.wmodes(exc, freq * (1.3 - (size * 0.6)),
-			[1, 1.71, 2.47, 3.3, 4.6], [1, 0.7, 0.5, 0.4, 0.25], dec, Engine_DrumDrum.damp(wood));
-		var air = HPF.ar(WhiteNoise.ar, 1500) * Decay2.ar(hits, 0.0002, 0.004) * crack * 1.5;
-		var env = Decay2.ar(hits, 0.0005, dec).min(1);
-		^[((boards * 0.6) + air).tanh * lvl * 0.55, env, 0.001]
+		var dh = trig.collect({ |tr, k| if(k.odd) { tr * (1 - ka) } { tr } }).inject(0, { |a, b| a + b });
+		var bh = trig.collect({ |tr, k| if(k.odd) { tr * ka } { 0 } }).inject(0, { |a, b| a + b });
+		var skin = Engine_DrumDrum.wmodes(Engine_DrumDrum.strikes(dh, 0.0007), freq, [1, 2, 3, 4, 5],
+			[0.5, 1, 0.6, 0.4, 0.25], dec, Engine_DrumDrum.damp(wood));
+		var tap = LPF.ar(WhiteNoise.ar, 2500) * Decay2.ar(dh, 0.0003, 0.01) * thud * 0.7;
+		var kas = LPF.ar(WhiteNoise.ar, 700) * Decay2.ar(bh, 0.0005, 0.025) * 1.2;
+		var env = Decay2.ar(dh + bh, 0.0005, dec.max(0.03)).min(1);
+		^[((skin * 1.1 * (1.15 - thud)) + (tap * 1.6) + (kas * 1.6)).tanh * lvl * 0.9, env, 0.001]
 	}
 
-	// SNR: a cajon slap, a hard hand at the top edge of the face: its
-	// higher modes, a little of the box under them, and the snare WIRES
-	// inside buzzing against the face for as long as it moves (W.DEC
-	// longer still). SLAP is how hard, W.TONE the wires' colour.
-	*cajonslap { arg t, pr, decm, g;
-		var freq = t[0] * pr * (1 + (g * 0.25)), dec = t[1] * decm;
-		var slap = t[2], wires = t[3], wt = t[4], wdec = t[5] * decm, wood = t[6], lvl = t[7];
-		var exc = Engine_DrumDrum.knock(0.45 + (slap * 0.5));
-		var face = Engine_DrumDrum.wmodes(exc, freq, [1, 1.59, 2.14, 2.3, 2.65, 2.92],
-			[0.7, 1, 0.8, 0.6, 0.5, 0.35], dec, Engine_DrumDrum.damp(wood));
-		var box = Ringz.ar(exc, freq * 0.3, dec * 0.8) * 0.3;
-		var wenv = EnvGen.ar(Env([0, 1, 0], [0.001, wdec], [0, -5]));
-		var moving = (Amplitude.ar(face, 0.0005, 0.04) * 3).clip(0, 1);
-		var n = WhiteNoise.ar;
-		var buzz = ((BPF.ar(n, wt, 0.9) * 1.6) + (HPF.ar(n, wt * 1.5) * 0.5))
-			* ((wenv * 0.6) + (moving * 0.6)) * wires;
-		var env = EnvGen.ar(Env([0, 1, 0], [0.0008, dec], [0, -5]));
-		^[(((face * 0.55) + box).tanh + buzz) * lvl, env.max(wenv), 0.001]
+	// SNR: the dayan. RIM is where the finger lands: in the middle (tun,
+	// the fundamental singing) out to the rim (na, the fundamental held
+	// down by the ring finger, the harmonics ringing). DAMP leaves the
+	// finger on (te: a tap, no ring). SYAHI is how harmonic the skin is,
+	// a plain drum at 0; FLICK how sharp the finger comes off it.
+	*dayan { arg t, pr, decm, g;
+		var freq = t[0] * pr * (1 + (g * 0.15)), dec = t[1] * decm;
+		var rim = t[2], dmp = t[3], syahi = t[4], flick = t[5], wood = t[6], lvl = t[7];
+		var exc = Engine_DrumDrum.knock(0.4 + (flick * 0.5));
+		var plain = [1, 1.59, 2.14, 2.3, 2.65, 2.92];
+		var ratios = 6.collect({ |k| ((k + 1) * syahi) + (plain[k] * (1 - syahi)) });
+		var amps = [[1, 0.55, 0.35, 0.22, 0.12, 0.07], [0.12, 1, 0.75, 0.55, 0.35, 0.2]]
+			.flop.collect({ |p| (p[0] * (1 - rim)) + (p[1] * rim) });
+		var d = dec * (1 - (dmp * 0.9));
+		var bend = EnvGen.kr(Env([1.015, 1], [0.02], -4));
+		var skin = Engine_DrumDrum.wmodes(exc, freq * bend, ratios, amps, d, Engine_DrumDrum.damp(wood));
+		var tap = LPF.ar(WhiteNoise.ar, 1800) * EnvGen.ar(Env.perc(0.0005, 0.015)) * dmp * 0.5;
+		var snap = HPF.ar(WhiteNoise.ar, 3000) * EnvGen.ar(Env.perc(0.0002, 0.003)) * flick * 0.3;
+		var env = EnvGen.ar(Env.perc(0.001, d, 1, -4));
+		^[((skin * 0.95) + tap + snap).tanh * lvl * 1.1, env, 0.001]
 	}
 
 	// mode tables: a solid block, a hollow temple block, a clave rod
@@ -562,29 +578,32 @@ Engine_DrumDrum : CroneEngine {
 		^[sig * lvl * 5, env, atk]
 	}
 
-	// CYM: dried seed pods on a string, shaken. A pod knocking another is
-	// a hollow tick, a burst of noise rung briefly somewhere around PITCH
-	// (SPREAD is how far apart the pods are), and the seeds inside rattle
-	// after it as a hiss of fine grains (SEEDS). DENSITY is how many pods.
-	// The hand swings back and forth (SHAKE: 0 a smooth pour, up to a
-	// chk-chk-chk), SWELL is how long it takes to get going and DECAY how
-	// long it rattles on.
-	*rainstick { arg t, pr, decm, g;
+	// an acoustic cymbal's modes, as multiples of its lowest: dense and
+	// inharmonic, spreading wider the higher they go
+	*cymratios { ^16.collect({ |k| 1 + (k * 0.62) + (0.09 * (k ** 1.75)) + (0.07 * sin(k * 2.3)) }) }
+
+	// CYM: an acoustic cymbal, struck. The stick puts noise into the
+	// plate's modes (PITCH is the lowest), which ring on over DECAY, the
+	// higher ones dying sooner, so it darkens as it goes. STICK is the
+	// stick: a soft mallet (slow, dark) to a hard tip. BELL rings the cup's
+	// few long partials (a ride's ping), WASH the haze of modes too dense to
+	// tell apart, TONE how bright the whole plate is. SWELL rolls it in.
+	*cymbal { arg t, pr, decm, g;
 		var freq = t[0] * pr * (1 + (g * 0.08)), dec = t[1] * decm;
-		var dens = t[2], spread = t[3], seeds = t[4], shake = t[5], swell = t[6], lvl = t[7];
+		var stick = t[2], bell = t[3], wash = t[4], tone = t[5], swell = t[6], lvl = t[7];
 		var env = EnvGen.ar(Env([0, 1, 0], [swell, dec], [2, -4]));
-		var hrate = Rand(5, 6.5) * (1 + (LFNoise1.kr(1.3) * 0.1));
-		var swing = (SinOsc.ar(hrate, 0.5pi) * 0.5 + 0.5) ** 3;
-		var act = env * ((1 - shake) + (shake * swing * 1.8));
-		var rate = (50 * (40 ** dens)) * act;
-		var pods = 3.collect({ |k|
-			var d = Dust.ar(rate / 3);
-			var fr = TRand.ar(freq * (1 - (spread * 0.45)), freq * (1 + spread), d);
-			var burst = Decay.ar(d, 0.0006) * WhiteNoise.ar;
-			(Ringz.ar(burst, fr, 0.003) * 0.08) + (BPF.ar(burst, fr, 0.8) * 0.5)
-		}).inject(0, { |a, b| a + b });
-		var grit = HPF.ar(Decay.ar(Dust.ar(rate * 5), 0.0002) * WhiteNoise.ar, 3500) * seeds;
-		^[(pods + grit) * lvl * 5, env, swell]
+		var hit = EnvGen.ar(Env([0, 1, 0], [swell.max(0.0005), 0.003 + ((1 - stick) * 0.02)], [2, -4]));
+		var exc = LPF.ar(WhiteNoise.ar * hit, 2500 + (stick * 9000));
+		var plate = Engine_DrumDrum.cymratios.collect({ |r, k|
+			[(freq * r).clip(20, 16000), dec * 1.3 / (1 + (k * 0.15)), 1 / (1 + (k * 0.08))]
+		}).inject(0, { |sum, m| sum + (Ringz.ar(exc, m[0], m[1]) * m[2]) }) * 0.012;
+		var cup = [2.37, 3.11, 4.53].collect({ |r, k|
+			Ringz.ar(exc, (freq * r * 2).clip(20, 16000), dec * 0.8) * (1 - (k * 0.25))
+		}).inject(0, { |a, b| a + b }) * bell * 0.01;
+		var haze = BPF.ar(WhiteNoise.ar, freq * 9, 1.2) * env * wash * 0.25;
+		var dark = EnvGen.ar(Env([1, 0.4], [dec], -2));
+		var sig = LPF.ar(plate + cup + haze, ((2200 + (tone * 9000)) * (0.6 + (stick * 0.4)) * dark).clip(800, 18000));
+		^[HPF.ar(sig, freq * 0.7) * lvl * 2, env, swell]
 	}
 
 	// -------------------------------------------------------------- FM kit
@@ -785,22 +804,39 @@ Engine_DrumDrum : CroneEngine {
 		^[Engine_DrumDrum.dac(sig * env * am) * lvl * 0.8, env, 0.001]
 	}
 
-	// ---------------------------------------------------------- GLITCH kit
+	// ------------------------------------------------------------- ADD kit
 	//
-	// Soft glitch drums after Matmos and Björk's Vespertine, where the beat
-	// is microsound: snow underfoot, a deck of cards, water, breath, the
-	// tiny clicks a sound file makes when it is cut. Everything here starts
-	// as noise, and stays quiet and close, like a contact mic:
-	//   grains    most voices are clouds of tiny filtered noise grains, each
-	//             landing at its own random pitch and loudness, so no two
-	//             hits are the same even before ANALOG
-	//   stutter   STUTTER / GAP retrigger the hit as an edit would, a few
-	//             repeats a few milliseconds to a beat apart, each quieter
-	//   soft      exciters are noise breaths of a few milliseconds rather
-	//             than clicks, the tops are rounded, and nothing is driven
-	//             harder than a gentle soft clip
+	// Additive drums after Autechre, the Max and Nord Modular years: every
+	// voice is a handful of sine partials, each with its own frequency,
+	// level and decay, so the knobs reach inside the spectrum rather than
+	// filtering it from outside. What that gives, and what these voices
+	// lean on:
+	//   click     partials that all start at the top of a cosine add up to
+	//             an impulse: CLICK lines them up, from a hard digital edge
+	//             to a soft, random-phase onset
+	//   series    PARTS, STRETCH, RATIO and SPREAD move the partials off
+	//             the harmonic series, from a tone to a bell to metal
+	//   damping   each partial decays on its own clock: TILT is how loud
+	//             the top is, DAMP and SHINE whether it dies first or last
+	//   motion    partials that glide into tune (BD2), a peak that walks up
+	//             the harmonics (PRC2), sines rerolled at random (SNR, CLP),
+	//             and ratchets that speed up or slow down (CLP, HAT)
+	// Nothing here rolls lang-side random numbers: the per-partial offsets
+	// are fixed tables, so every unit is the same instrument.
 
-	// a stutter: n triggers gap apart, each quieter until the last is at
+	// partials summed one at a time: a bank built as an array and mixed
+	// keeps every partial's wires alive at once, and scsynth has 64
+	*adds { arg n, fn;
+		^(0..(n - 1)).inject(0, { |acc, k| acc + fn.value(k) })
+	}
+
+	// a partial's starting phase: CLICK 1 is the top of a cosine, so a bank
+	// of them starts as an impulse; 0 is anywhere
+	*cphase { arg click;
+		^(pi / 2) + (Rand(-pi, pi) * (1 - click.clip(0, 1)))
+	}
+
+	// a ratchet: n triggers, gap apart, each quieter until the last is at
 	// FALL, the gaps a touch uneven by ANALOG
 	*stutter { arg n, gap, fall;
 		var g = gap.max(0.001), nn = n.round.max(1);
@@ -809,195 +845,191 @@ Engine_DrumDrum : CroneEngine {
 		^trig * open * EnvGen.ar(Env([1, fall.max(0.001)], [(nn * g).max(0.002)], \exp))
 	}
 
-	// BD1: a hush of a kick. A breath of pink noise, SOFT long, pings a low
-	// resonance that falls SWEEP octaves into PITCH; BREATH is that noise
-	// heard on its own, the air around the thump.
-	*hush { arg t, pr, decm, g;
+	// BD1: a sine kick built up from harmonics. PARTS of them over a
+	// fundamental that drops SWEEP octaves in S.TIME, the upper ones dying
+	// first; TILT how loud they start. CLICK lines them up and adds a few
+	// high cosines a couple of milliseconds long: the edge of a cut.
+	*akick { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
-		var soft = t[2], breath = t[3], stut = t[4], gap = t[5], sweep = t[6], lvl = t[7];
-		var train = Engine_DrumDrum.stutter(stut, gap, 0.35);
-		var w = 0.0015 + (soft * 0.012);
-		// a breath with a steady push under it: the noise is the texture, the
-		// push (unit area, whatever SOFT) is what makes every thump as big
-		var push = Decay2.ar(train, w * 0.3, w) / (0.7 * w * SampleRate.ir);
-		var exc = push * (1 + (LPF.ar(PinkNoise.ar, 500 + ((1 - soft) * 5000)) * 1.5));
-		var f = (freq * (1 + (((2 ** sweep) - 1) * Engine_DrumDrum.rc(0.025))) * (1 + (g * 0.2))).clip(20, 2000);
-		var body = Ringz.ar(exc, f, dec) * 9;
-		var air = HPF.ar(exc, 1200) * breath * 0.5;
-		var hold = (stut.round.max(1) - 1) * gap;
-		var env = EnvGen.ar(Env([0, 1, 1, 0.001, 0], [0.003, hold, dec, 0.005], [2, 0, \exp, 0]));
-		var sig = LPF.ar(body.softclip + air, 4000);
-		^[LeakDC.ar(sig) * lvl, env, 0.005 + hold]
+		var sweep = t[2], swt = t[3], parts = t[4], tilt = t[5], click = t[6], lvl = t[7];
+		var penv = EnvGen.ar(Env([2 ** sweep, 1], [swt.max(0.001)], -6));
+		var f = freq * penv * (1 + (g * 0.2));
+		var pow = 4 - (tilt * 3);
+		var ph = Engine_DrumDrum.cphase(click);
+		var atk = 0.0001 + ((1 - click) * 0.002);
+		var body = Engine_DrumDrum.adds(8, { |k|
+			var n = k + 1;
+			var on = (parts - k).clip(0, 1);
+			var e = EnvGen.ar(Env([0, 1, 0.001, 0], [atk, dec / (n ** 1.3), 0.005], [0, \exp, 0]));
+			SinOsc.ar((f * n).clip(20, 20000), ph) * e * on * (n ** pow.neg)
+		});
+		var tick = Engine_DrumDrum.adds(4, { |k|
+			SinOsc.ar((freq * [23, 31, 41, 53][k]).clip(200, 18000), pi / 2)
+		}) * EnvGen.ar(Env([1, 0.001, 0], [0.003, 0.001], [\exp, 0])) * click * 0.12;
+		var env = EnvGen.ar(Env([0, 1, 0.001, 0], [atk, dec, 0.005], [0, \exp, 0]));
+		^[LeakDC.ar(((body * 1.5) + tick).softclip) * lvl, env, 0.002]
 	}
 
-	// BD2: a heartbeat, lub-dub. Two soft thumps GAP apart, the second DUB
-	// as loud and a little higher; GRIT is a crackle in the flesh of it.
-	*heart { arg t, pr, decm, g;
+	// BD2: a kick that melts into tune. Its partials start SPREAD off the
+	// harmonic series, each its own way, and glide onto it over MELT while
+	// the whole falls BEND octaves: a metallic dwoing that resolves to a
+	// note. PARTS and TILT as on BD1.
+	*melt { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
-		var dub = t[2], gap = t[3], soft = t[4], grit = t[5], tone = t[6], lvl = t[7];
+		var spread = t[2], melt = t[3], parts = t[4], tilt = t[5], bend = t[6], lvl = t[7];
+		var offs = [0.06, 0.37, -0.21, 0.53, -0.44, 0.29, 0.71, -0.33];
+		var menv = EnvGen.ar(Env([1, 0], [melt.max(0.002)], -4));
+		var penv = EnvGen.ar(Env([2 ** bend, 1], [(melt * 0.6).max(0.002)], -5));
+		var f = freq * penv * (1 + (g * 0.2));
+		var pow = 3 - (tilt * 2.4);
+		var body = Engine_DrumDrum.adds(8, { |k|
+			var n = k + 1;
+			var on = (parts - k).clip(0, 1);
+			var e = EnvGen.ar(Env([0, 1, 0.001, 0], [0.0004, dec / (n ** 0.9), 0.005], [0, \exp, 0]));
+			var fk = f * n * (1 + (spread * offs[k] * menv));
+			SinOsc.ar(fk.clip(20, 20000), pi / 2) * e * on * (n ** pow.neg)
+		});
+		var env = EnvGen.ar(Env([0, 1, 0.001, 0], [0.0004, dec, 0.005], [0, \exp, 0]));
+		^[LeakDC.ar((body * 1.5).softclip) * lvl, env, 0.002]
+	}
+
+	// CLP: a ratchet of sine clusters. BURSTS of eight sines, GAP apart and
+	// the gaps ACCELerating or slowing, scattered over WIDTH octaves around
+	// TONE; REROLL deals each burst a new chord, from the same one every
+	// time to a fresh one each. The last burst rings on for DECAY.
+	*cluster { arg t, pr, decm, g;
+		var freq = t[0] * pr, dec = t[1] * decm;
+		var cnt = t[2], gap = t[3], accel = t[4], width = t[5], reroll = t[6], lvl = t[7];
 		var t0 = Impulse.ar(0);
-		var t1 = TDelay.ar(t0, gap.clip(0.01, 0.5)) * dub;
-		var w = 0.003 + (soft * 0.02);
-		var n = 1 + LPF.ar(PinkNoise.ar, 900);
-		var lub = Ringz.ar(n * Decay2.ar(t0, w * 0.3, w) / (0.7 * w * SampleRate.ir),
-			(freq * (1 + (g * 0.2))).clip(20, 2000), dec);
-		var dubs = Ringz.ar(n * Decay2.ar(t1, w * 0.3, w * 0.8) / (0.5 * w * SampleRate.ir),
-			(freq * 1.15).clip(20, 2000), dec * 0.8);
-		var env = Decay2.ar(t0 + t1, 0.003, dec * 0.6).min(1);
-		var crack = Decay2.ar(Dust.ar(180), 0.0002, 0.002) * BPF.ar(WhiteNoise.ar, 2500, 1) * grit * 3;
-		var sig = LPF.ar(((lub + dubs) * 7).softclip, tone.clip(80, 16000)) + (crack * env);
-		^[LeakDC.ar(sig) * lvl, env, gap + 0.01]
+		var at = 0, step = gap.max(0.002), last = cnt.round.clip(1, 8) - 1;
+		var trigs = 8.collect { |i|
+			var tr = TDelay.ar(t0, at.min(1)) * (last >= i);
+			at = at + step;
+			step = step * accel;
+			tr
+		};
+		var all = trigs.sum;
+		var tail = Decay2.ar(Select.ar(last, trigs), 0.0005, dec);
+		var bursts = Decay2.ar(all * TRand.ar(0.6, 1, all), 0.0003, gap.clip(0.004, 0.05) * 0.8);
+		var env = (bursts + tail).min(1);
+		var tab = [-1, 0.71, -0.43, 0.14, 0.86, -0.71, 0.43, -0.14];
+		var f = freq * (1 + (g * 0.3));
+		var sig = Engine_DrumDrum.adds(8, { |k|
+			var dev = (tab[k] + (TRand.ar(-1, 1, all) * reroll)) * width * 0.5;
+			SinOsc.ar((f * (2 ** dev)).clip(80, 16000), Engine_DrumDrum.cphase(0.5))
+		}) * 0.3;
+		^[LeakDC.ar(sig * env) * lvl, env, 0.001]
 	}
 
-	// CLP: a footstep in snow. A cloud of tiny grains, DENSITY a second at
-	// the peak of the step, each GRAIN long, at its own pitch SPREAD around
-	// TONE and its own loudness (CRUNCH makes most of them small and a few
-	// big). The step presses, gives, then settles. SQUEAK is packed snow.
-	*snow { arg t, pr, decm, g;
+	// SNR: a drum's modes and a spray of sines. The membrane is six modes
+	// at a drumhead's Bessel ratios, a little tense at first; the snares are
+	// ten sines around BAND, each jumping to a new pitch RATE times a
+	// second: slow, it bleeps and chirps; fast, it hisses. SNAP is how much
+	// spray, N.DEC how long, CLICK the edge of the stick.
+	*spectral { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
-		var dens = t[2], grain = t[3], crunch = t[4], spread = t[5], squeak = t[6], lvl = t[7];
-		var denv = EnvGen.ar(Env([0, 1, 0.45, 0.8, 0], [0.006, dec * 0.25, dec * 0.15, dec * 0.6], [2, -2, 1, -3]));
-		// a floor under the density so the settle still crackles, but none
-		// once the step is over, or the voice would never fall silent
-		var dust = Dust.ar(dens * denv.max(0.02)) * (denv > 0.0005);
-		var amp = TRand.ar(0, 1, dust) ** (1 + (crunch * 3));
-		var sp = 1 + (spread * 2);
-		var fk = (freq * (1 + (g * 0.3)) * TExpRand.ar(sp.reciprocal, sp, dust)).clip(100, 16000);
-		var n = WhiteNoise.ar;
-		var grains = BPF.ar(n, fk, 0.6) * Decay2.ar(dust * amp, 0.0002, grain);
-		var hiss = BPF.ar(n, (freq * 0.7).clip(100, 16000), 1.5) * denv * 0.05;
-		var sq = Ringz.ar(BPF.ar(n, (freq * 0.5).clip(100, 16000), 0.3) * denv,
-			(freq * 0.45 * (1 + (LFNoise1.kr(20) * 0.05))).clip(100, 8000), 0.03) * squeak * 0.02;
-		var sig = (((grains * 4) + hiss + sq)).softclip;
-		^[sig * lvl, denv, dec * 0.4]
+		var snap = t[2], ndec = t[3] * decm, rate = t[4], band = t[5], click = t[6], lvl = t[7];
+		var ratios = [1, 1.594, 2.136, 2.296, 2.653, 2.918];
+		var penv = EnvGen.ar(Env([1.25, 1], [0.02], -4));
+		var f = freq * penv * (1 + (g * 0.25));
+		var ph = Engine_DrumDrum.cphase(click);
+		var atk = 0.0001 + ((1 - click) * 0.0015);
+		var body = Engine_DrumDrum.adds(6, { |k|
+			var e = EnvGen.ar(Env([0, 1, 0.001, 0], [atk, dec / ((k + 1) ** 0.6), 0.005], [0, \exp, 0]));
+			SinOsc.ar((f * ratios[k]).clip(20, 18000), ph) * e * ((k + 1) ** -0.7)
+		});
+		var nenv = EnvGen.ar(Env([0, 1, 0.001, 0], [atk, ndec, 0.005], [0, \exp, 0]));
+		var spray = Engine_DrumDrum.adds(10, { |k|
+			var tr = Dust.ar(rate) + Impulse.ar(0);
+			SinOsc.ar((band * TExpRand.ar(0.5, 2, tr)).clip(200, 18000), ph)
+		}) * nenv * 0.22;
+		var env = EnvGen.ar(Env([0, 1, 0.001, 0], [atk, dec.max(ndec), 0.005], [0, \exp, 0]));
+		^[LeakDC.ar(((body * 0.8) + (spray * snap)).softclip) * lvl, env, 0.001]
 	}
 
-	// SNR: a riffle of cards. Cards flick past at RATE a second, speeding up
-	// or slowing down by CURVE across DECAY, JITTER apart; SNAP the deck's
-	// first soft slap, PAPER the rustle under the flicks. Each flick is a
-	// rounded tick of pink noise at its own pitch around TONE, rather than a
-	// click of white noise, so the riffle purrs instead of buzzing, and the
-	// whole thing is closed down above TONE.
-	*cards { arg t, pr, decm, g;
+	// PRC1: a bell of evenly spaced partials. The first at PITCH, the rest
+	// RATIO apart (1 is the harmonic series; anything else is a frequency-
+	// shifted, inharmonic one), PARTS of them, TILT how loud the top is,
+	// DAMP whether it dies first (+) or rings on past the fundamental (-).
+	// BEND drops into the note.
+	*shifted { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
-		var rate = t[2], curve = t[3], snap = t[4], paper = t[5], jit = t[6], lvl = t[7];
-		var renv = EnvGen.ar(Env([rate.max(1), rate.max(1) * (4 ** curve)], [dec], \exp));
-		var trig = Impulse.ar(renv * (1 + (LFNoise0.ar(renv) * jit * 0.6)));
-		var win = EnvGen.ar(Env([0, 1, 0.7, 0], [0.002, dec, 0.01], [0, -1, -3]));
-		var amp = trig * win * TRand.ar(0.3, 1, trig);
-		var n = PinkNoise.ar;
-		var f = (freq * (1 + (g * 0.3))).clip(200, 12000);
-		var flick = BPF.ar(n, (f * TExpRand.ar(0.7, 1.4, trig)).clip(200, 12000), 1.2)
-			* Decay2.ar(amp, 0.0004, 0.0025) * 11;
-		var bed = BPF.ar(n, (f * 0.5).clip(200, 12000), 1.5) * win * paper * 0.5;
-		// the slap: the deck's edge, a papery knock with a little low thud
-		var senv = EnvGen.ar(Env.perc(0.001, 0.04));
-		var snp = ((BPF.ar(n, (f * 0.4).clip(200, 6000), 1) * 4)
-			+ (Ringz.ar(Decay2.ar(Impulse.ar(0), 0.001, 0.004), 190, 0.06) * 0.03)) * senv * snap;
-		var sig = LPF.ar(LPF.ar(flick + bed + snp, (f * 1.8).clip(1500, 14000)), 9000);
-		^[sig * lvl, win.max(senv), dec]
+		var ratio = t[2], parts = t[3], tilt = t[4], damp = t[5], bend = t[6], lvl = t[7];
+		var penv = EnvGen.ar(Env([2 ** bend, 1], [0.03], -6));
+		var f = freq * penv * (1 + (g * 0.15));
+		var pow = 2 - (tilt * 2);
+		var body = Engine_DrumDrum.adds(8, { |k|
+			var n = k + 1;
+			var on = (parts - k).clip(0, 1);
+			var e = EnvGen.ar(Env([0, 1, 0.001, 0], [0.0002, (dec / (n ** (damp * 1.2))).clip(0.005, 8), 0.005], [0, \exp, 0]));
+			SinOsc.ar((f * (1 + (k * ratio))).clip(20, 18000), pi / 2) * e * on * (n ** pow.neg)
+		});
+		var env = EnvGen.ar(Env([0, 1, 0.001, 0], [0.0002, dec * (8 ** damp.neg.max(0)), 0.005], [0, \exp, 0]));
+		^[LeakDC.ar((body * 0.7).softclip) * lvl, env, 0.001]
 	}
 
-	// PRC1: a drop of water. A breath of noise rings a resonance that RISES
-	// as it dies, the way a bubble does; SCATTER more, smaller drops over
-	// WINDOW, SPREAD in pitch; SPLASH the hiss of it landing.
-	*drop { arg t, pr, decm, g;
+	// PRC2: a tom whose overtones are scanned. Ten harmonics, and a peak
+	// WIDTH harmonics wide that walks from FROM to TO in SPEED, so the
+	// sound vowels as it dies, the way a swept filter does but with nothing
+	// between the harmonics. ODD takes the even ones out, towards a square.
+	*scan { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
-		var rise = t[2], splash = t[3], scat = t[4], spread = t[5], win = t[6], lvl = t[7];
-		var t0 = Impulse.ar(0);
-		var n = WhiteNoise.ar;
-		var exc = HPF.ar(n, 500) * Decay2.ar(t0, 0.0001, 0.0008);
-		var fenv = EnvGen.ar(Env([1, 2 ** rise], [dec.max(0.005)], 3));
-		var main = Ringz.ar(exc, (freq * fenv * (1 + (g * 0.2))).clip(50, 16000), dec);
-		var open = EnvGen.ar(Env([1, 1, 0], [win, 0.001]));
-		var sd = Dust.ar(scat.squared * 40) * open;
-		var sp = 1 + (spread * 2);
-		var sf = (freq * TExpRand.ar(sp.reciprocal, sp, sd)).clip(50, 16000);
-		var scatter = Ringz.ar(HPF.ar(n, 500) * Decay2.ar(sd * TRand.ar(0.2, 0.7, sd), 0.0001, 0.0006), sf, dec * 0.7);
-		var spl = HPF.ar(n, 3000) * EnvGen.ar(Env.perc(0.0003, 0.012)) * splash * 0.5;
-		var env = EnvGen.ar(Env([0, 1, 1, 0], [0.001, win, dec]));
-		var sig = (((main + (scatter * 0.6)) * 2.3).softclip) + spl;
-		^[sig * lvl, env, win]
+		var from = t[2], to = t[3], width = t[4], speed = t[5], odd = t[6], lvl = t[7];
+		var f = freq * (1 + (g * 0.15));
+		var c = EnvGen.kr(Env([from, to], [speed.max(0.005)], -2));
+		var aenv = EnvGen.ar(Env([0, 1, 0.001, 0], [0.0003, dec, 0.005], [0, \exp, 0]));
+		var body = Engine_DrumDrum.adds(10, { |k|
+			var n = k + 1;
+			var peak = (((n - c) / width.max(0.2)).squared * -0.5).exp;
+			var keep = if(n.even) { 1 - odd } { 1 };
+			SinOsc.ar((f * n).clip(20, 18000), pi / 2) * peak * keep
+		});
+		^[LeakDC.ar((body * aenv * 0.55).softclip) * lvl, aenv, 0.001]
 	}
 
-	// PRC2: a music box tine plucked by noise. A tine is nearly a pure tone:
-	// a breath BODY long rings its fundamental at PITCH, and BRIGHT is the
-	// glassy ping of its upper mode (6.27 times up, inharmonic, gone in a
-	// moment). STUTTER repeats it GAP apart, each repeat STEP semitones on
-	// from the last, the way a cut-up loop steps. The repeats take turns on
-	// two tines, so each note keeps ringing at its own pitch under the next
-	// instead of being dragged up to it.
-	*pluck { arg t, pr, decm, g;
+	// HAT: eight sines at a fixed set of metal ratios, SPREAD from all at
+	// PITCH (a ping) out to a wide cluster, PARTS of them, struck in
+	// cosine phase so the hit is a tick. ROLL ratchets it, GAP apart;
+	// SHINE lets the top partials ring past the bottom ones.
+	*sinehat { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
-		var bright = t[2], body = t[3], stut = t[4], gap = t[5], step = t[6], lvl = t[7];
-		var train = Engine_DrumDrum.stutter(stut, gap, 0.35);
-		var k = (PulseCount.ar(train) - 1).max(0);
-		var f = (freq * (1 + (g * 0.1)) * (2 ** ((k * step) / 12))).clip(30, 5000);
-		var w = 0.0008 + (body * 0.006);
-		var n = LPF.ar(PinkNoise.ar, 1500 + (bright * 5000));
-		var even = (k % 2) < 0.5;
-		var tine = [train * even, train * (1 - even)].collect { |tr|
-			// held from its own trigger; Ringz reads its frequency once a
-			// block, so before the first latch it must already be at PITCH
-			var lt = Latch.ar(f, tr);
-			var ft = Select.ar(lt > 1, [f, lt]).max(30);
-			// a steady push with the breath on it: noise alone swings the
-			// level a lot from note to note
-			var exc = (1 + (n * 2)) * Decay2.ar(tr, w * 0.3, w) / (0.7 * w * SampleRate.ir);
-			Ringz.ar(exc, ft, dec)
-				+ (Ringz.ar(exc, (ft * 6.27).clip(30, 16000), (dec * 0.04).clip(0.005, 0.15)) * bright * 0.6)
-		}.sum;
-		var hold = (stut.round.max(1) - 1) * gap;
-		var env = EnvGen.ar(Env([0, 1, 1, 0.001, 0], [0.001, hold, dec, 0.005], [2, 0, \exp, 0]));
-		var sig = LPF.ar(tine, 9000) * 4.5;
-		^[LeakDC.ar(sig) * lvl, env, 0.005 + hold]
+		var spread = t[2], parts = t[3], roll = t[4], gap = t[5], shine = t[6], lvl = t[7];
+		var ratios = [1, 1.34, 1.73, 2.11, 2.48, 2.93, 3.37, 3.81];
+		var train = Engine_DrumDrum.stutter(roll, gap, 0.4);
+		var f = freq * (1 + (g * 0.1));
+		var sig = Engine_DrumDrum.adds(8, { |k|
+			var on = (parts - k).clip(0, 1);
+			var dk = (dec * ((k + 1) ** ((shine - 0.5) * 1.4))).clip(0.002, 6);
+			var fk = (f * (ratios[k] ** (spread * 2)) * (1 + (k * 0.0031))).clip(500, 19000);
+			SinOsc.ar(fk, pi / 2) * Decay2.ar(train, 0.00005, dk) * on
+		});
+		var hold = (roll.round.max(1) - 1) * gap;
+		var env = EnvGen.ar(Env([0, 1, 1, 0.001, 0], [0.0005, hold, dec * 1.5, 0.005], [0, 0, \exp, 0]));
+		^[LeakDC.ar((sig * 0.45).softclip) * lvl, env, 0.002 + hold]
 	}
 
-	// HAT: the clicks a cut sound file makes. A tick of noise at TONE, then
-	// GRAINS more scattered over SPREAD, each at its own pitch; BITS and
-	// RATE crush them; AIR a breath of hiss after, on DECAY.
-	*ticks { arg t, pr, decm, g;
-		var tone = t[0] * pr, dec = t[1] * decm;
-		var grains = t[2], spread = t[3], bits = t[4], rate = t[5], air = t[6], lvl = t[7];
-		var t0 = Impulse.ar(0);
-		var span = 0.005 + (spread * 0.15);
-		var d = Dust.ar(grains.squared * 400) * EnvGen.ar(Env([1, 1, 0], [span, 0.001]));
-		var trig = t0 + (d * TRand.ar(0.15, 0.8, d));
-		var n = WhiteNoise.ar;
-		var tk = BPF.ar(n, (tone * (1 + (g * 0.1)) * TExpRand.ar(0.7, 1.4, trig)).clip(200, 18000), 1)
-			* Decay2.ar(trig, 0.00005, 0.001);
-		var aenv = Engine_DrumDrum.rcenv(0.0005, dec);
-		var sig = (tk * 4) + (HPF.ar(n, (tone * 0.8).clip(200, 16000)) * aenv * air * 0.15);
-		var q = 2 ** bits.clip(2, 16);
-		sig = (Latch.ar(sig, Impulse.ar(SampleRate.ir * (0.5 ** (rate * 5)))) * q).round / q;
-		^[sig * lvl, EnvGen.ar(Env([1, 1, 0], [span, dec])), span]
-	}
-
-	// CYM: a whisper. Breath through three vowel formants (VOWEL walks
-	// A E I O U, PITCH moves them all), SWELLing in; SHIMMER a soft comb
-	// that turns it glassy, CRACKLE ice, AIR the hiss on top. The formants
-	// are wide, as a whisper's are: narrow ones whistle.
-	*breath { arg t, pr, decm, g;
+	// CYM: a wash of twelve partials on a STRETCHed series (1 is
+	// harmonic, 2 a bell, between them gongs and glass), each decaying on
+	// its own time, SCATTERed around DECAY, and beating against itself as
+	// SHIMMER wobbles each one's pitch and level. TILT is how bright, SWELL
+	// fades it in.
+	*wash { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
-		var swell = t[2], vowel = t[3], crack = t[4], shim = t[5], air = t[6], lvl = t[7];
-		var env = EnvGen.ar(Env([0, 1, 0.001, 0], [swell, dec, 0.01], [2, \exp, 0]));
-		var v = vowel.clip(0, 1) * 4, s = freq * (1 + (g * 0.2)) / 800;
-		var f1 = SelectX.kr(v, [800, 400, 270, 450, 325]) * s;
-		var f2 = SelectX.kr(v, [1150, 1600, 2300, 800, 700]) * s;
-		var f3 = SelectX.kr(v, [2900, 2700, 3000, 2830, 2530]) * s;
-		var n = PinkNoise.ar;
-		var voice = BPF.ar(n, f1.clip(80, 12000), 0.4) + (BPF.ar(n, f2.clip(80, 12000), 0.35) * 0.5)
-			+ (BPF.ar(n, f3.clip(80, 12000), 0.3) * 0.2);
-		var hiss = LPF.ar(HPF.ar(n, 3500), 9000);
-		var src = (voice * 7.5) + (hiss * air * 1.5);
-		// the comb is fed and filtered dark, and rings short, so it glistens
-		// rather than clangs
-		var glass = LPF.ar(CombC.ar(LPF.ar(src, 3000), 0.05, (f2 * 0.5).reciprocal.clip(0.0002, 0.05), 0.2),
-			4000) * shim * 0.35;
-		var cd = Dust.ar(6 + (crack * 60));
-		var cr = Decay2.ar(cd * TRand.ar(0.2, 1, cd), 0.0003, 0.0015) * BPF.ar(n, 4500, 1) * crack * 3;
-		var sig = LPF.ar(((src + glass) * env) + (cr * env), 8000);
-		^[sig * lvl, env, swell]
+		var stretch = t[2], scatter = t[3], shim = t[4], tilt = t[5], swell = t[6], lvl = t[7];
+		var dtab = [1, 0.45, 0.8, 0.3, 1.3, 0.6, 0.95, 0.35, 1.15, 0.5, 0.7, 0.4];
+		var f = freq * (1 + (g * 0.08));
+		var pow = 1.6 - (tilt * 1.6);
+		var sig = Engine_DrumDrum.adds(12, { |k|
+			var n = k + 1;
+			var dk = dec * (1 + ((dtab[k] - 0.7) * scatter * 2)).max(0.1);
+			var e = EnvGen.ar(Env([0, 1, 0.001, 0], [swell, dk, 0.005], [2, \exp, 0]));
+			var wob = LFNoise2.kr(0.5 + (shim * 9));
+			var fk = f * (n ** stretch) * (1 + (wob * shim * 0.006));
+			SinOsc.ar(fk.clip(20, 19000), Engine_DrumDrum.cphase(0)) * e * (n ** pow.neg)
+				* (1 - (shim * 0.5 * (wob + 1) * 0.5))
+		});
+		var env = EnvGen.ar(Env([0, 1, 0.001, 0], [swell, dec * 1.5, 0.005], [2, \exp, 0]));
+		^[LeakDC.ar((sig * 0.45).softclip) * lvl, env, swell]
 	}
 
 	// ------------------------------------------------------------- wrapper
@@ -1065,12 +1097,12 @@ Engine_DrumDrum : CroneEngine {
 
 		// WOOD and FM after WARM, so WARM's parts roll the same as before
 		[
-			[\dd_wbd1, \cajon], [\dd_wbd2, \slitlog], [\dd_wclp, \clapper], [\dd_wsnr, \cajonslap],
-			[\dd_wprc1, \woodblock], [\dd_wprc2, \balafon], [\dd_what, \shaker], [\dd_wcym, \rainstick],
+			[\dd_wbd1, \cajon], [\dd_wbd2, \bayan], [\dd_wclp, \tete], [\dd_wsnr, \dayan],
+			[\dd_wprc1, \woodblock], [\dd_wprc2, \balafon], [\dd_what, \shaker], [\dd_wcym, \cymbal],
 			[\dd_fbd1, \fkick], [\dd_fbd2, \fkick4], [\dd_fclp, \fclap], [\dd_fsnr, \fsnare],
 			[\dd_fprc1, \ftom], [\dd_fprc2, \ftaiko], [\dd_fhat, \fhat], [\dd_fcym, \fcym],
-			[\dd_gbd1, \hush], [\dd_gbd2, \heart], [\dd_gclp, \snow], [\dd_gsnr, \cards],
-			[\dd_gprc1, \drop], [\dd_gprc2, \pluck], [\dd_ghat, \ticks], [\dd_gcym, \breath]
+			[\dd_abd1, \akick], [\dd_abd2, \melt], [\dd_aclp, \cluster], [\dd_asnr, \spectral],
+			[\dd_aprc1, \shifted], [\dd_aprc2, \scan], [\dd_ahat, \sinehat], [\dd_acym, \wash]
 		].do { |e|
 			Engine_DrumDrum.build(e[0], { |t, pr, d, g| Engine_DrumDrum.perform(e[1], t, pr, d, g) });
 		};
@@ -1739,7 +1771,7 @@ Engine_DrumDrum : CroneEngine {
 			springS.set(msg[1].asSymbol, msg[2]);
 		});
 
-		// kit(track, kit): 0 WARM, 1 WOOD, 2 FM, 3 GLITCH, from the track's next hit.
+		// kit(track, kit): 0 WARM, 1 WOOD, 2 FM, 3 ADD, from the track's next hit.
 		// A voice still ringing on the old kit rings out.
 		this.addCommand(\kit, "ii", { |msg|
 			var t = msg[1].asInteger;

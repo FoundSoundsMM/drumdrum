@@ -740,7 +740,7 @@ function U.snap()
       screen.fill()
     end
   end
-  -- each track's kit along the bottom, tracks 1-8: WA, WO or FM
+  -- each track's kit along the bottom, tracks 1-8: WA, WO, FM or AD
   for t = 1, S.NTRACKS do
     local k = S.kit_of(t)
     screen.level((G.kit and G.kit.k == k) and 15 or ((t == St.sel) and 10 or 4))

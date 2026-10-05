@@ -12,7 +12,7 @@
 --           colour banks (BUSS DUCK TEXTURE SPACE), column 16 is BYPASS
 --   SNAP    rows 1-4 are 64 snapshots (SHIFT + PLAY opens it): tap loads on
 --           the beat (a blank cell loads the init patch), SHIFT + hold
---           saves. Row 7, columns 1-4 are the kits WARM WOOD FM GLITCH: tap
+--           saves. Row 7, columns 1-4 are the kits WARM WOOD FM ADD: tap
 --           one for every track, or hold one and press track buttons to
 --           move only those
 --   PERFORM rows 1-4 are 64 punch-in effects (SHIFT + MIX opens it), eight
