@@ -654,8 +654,10 @@ local function draw_colour()
 end
 
 -- each strip dim, its first pad a little brighter so the eight read apart;
--- what is sounding bright, a latch a step below
+-- what is sounding bright, a latch a step below, a press waiting for its
+-- quantize line blinking
 local function draw_perform()
+  local blink = (math.floor(util.time() * 8) % 2) == 0
   for f, s in ipairs(F.STRIPS) do
     local want = F.want(f)
     local held = {}
@@ -666,6 +668,7 @@ local function draw_perform()
       if held[i] then lv = 8 end
       if F.latched[f] == i then lv = 10 end
       if want == i then lv = held[i] and 15 or 12 end
+      if F.waiting(f, i) then lv = blink and 15 or 4 end
       g:led(x, y, lv)
     end
   end

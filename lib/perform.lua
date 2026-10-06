@@ -22,6 +22,11 @@
 -- first pass is what was playing anyway and the loop is always on the grid,
 -- and GATE counts its chops from the bar.
 --
+-- QUANTIZE (params > PERFORM) holds a press back to the next line of its
+-- grid, a beat by default, while the transport runs: the pad blinks while it
+-- waits. Letting go is never held back, and a pad let go of before its line
+-- comes never sounds.
+--
 -- TAPE is the hidden one: SHIFT + COLOUR, held. It loops the last LENGTH of
 -- the mix and varispeeds it to PITCH, both on E2/E3 while it is held.
 
@@ -38,7 +43,10 @@ local function beats() return clock.get_beats() end
 local function loop_pad(label, b)
   return { label = label, args = function()
     local L = b * bs()
-    local since = (beats() % b) * bs()
+    local ph = beats() % b
+    -- a hair before a line is the line: don't loop the pass just gone
+    if b - ph < 0.002 then ph = 0 end
+    local since = ph * bs()
     return "loop", since, L, since, 1
   end }
 end
@@ -136,6 +144,29 @@ F.held = {}      -- per strip: the pads physically held, oldest first
 F.latched = {}   -- per strip: a latched pad, or nil
 F.active = {}    -- per strip: what is sounding, { pad, args }
 F.tape = nil     -- the hidden TAPE while held: { args }
+F.pending = {}   -- per strip: the clock id of a press waiting for its line
+F.tape_wait = nil
+
+-- QUANTIZE: the grid a press waits for, in beats (0 = straight in)
+F.QUANT_NAMES = { "off", "1/16", "1/8", "1/4", "1/2", "1 BAR" }
+F.QUANT_BEATS = { 0, 1 / 4, 1 / 2, 1, 2, 4 }
+
+local function quant()
+  if not St.playing then return 0 end
+  local ok, v = pcall(function() return params:get("punch_q") end)
+  return ok and F.QUANT_BEATS[v] or 0
+end
+
+-- run fn on the next line of the quantize grid, or now; returns a clock id
+-- if it has to wait
+local function on_line(fn)
+  local n = quant()
+  if n <= 0 then fn() return nil end
+  return clock.run(function()
+    clock.sync(n)
+    fn()
+  end)
+end
 
 function F.init(state)
   St = state
@@ -164,8 +195,16 @@ function F.want(f)
   return h[#h] or F.latched[f]
 end
 
--- bring strip f's sound in line with what is held and latched
-function F.update(f)
+local function cancel(f)
+  if F.pending[f] then
+    clock.cancel(F.pending[f])
+    F.pending[f] = nil
+    St.dirty = true
+  end
+end
+
+-- bring strip f's sound in line with what is held and latched, now
+local function apply(f)
   local s = F.STRIPS[f]
   local want = F.want(f)
   local cur = F.active[f]
@@ -186,6 +225,25 @@ function F.update(f)
     F.active[f] = { pad = want, args = args }
   end
   St.dirty = true
+end
+
+-- the same, but a new pad waits for the quantize line; letting go doesn't
+function F.update(f)
+  local want = F.want(f)
+  local cur = F.active[f]
+  if (cur and cur.pad) == want then cancel(f) return end
+  if want == nil then cancel(f) apply(f) return end
+  if F.pending[f] then St.dirty = true return end  -- it reads want when it lands
+  F.pending[f] = on_line(function()
+    F.pending[f] = nil
+    apply(f)
+  end)
+  St.dirty = true
+end
+
+-- strip f is waiting for its line to change to pad i
+function F.waiting(f, i)
+  return F.pending[f] ~= nil and F.want(f) == i
 end
 
 -- ------------------------------------------------------------------- pads
@@ -248,13 +306,21 @@ local function tape_args()
 end
 
 function F.tape_on()
-  local a, b, c, d = tape_args()
-  engine.punch(TAPE, "loop", a, b, c, d)
-  F.tape = true
-  St.dirty = true
+  if F.tape or F.tape_wait then return end
+  F.tape_wait = on_line(function()
+    F.tape_wait = nil
+    local a, b, c, d = tape_args()
+    engine.punch(TAPE, "loop", a, b, c, d)
+    F.tape = true
+    St.dirty = true
+  end)
 end
 
 function F.tape_off()
+  if F.tape_wait then
+    clock.cancel(F.tape_wait)
+    F.tape_wait = nil
+  end
   if not F.tape then return end
   engine.unpunch(TAPE)
   F.tape = nil
@@ -269,7 +335,8 @@ local function tape_move()
 end
 
 function F.add_params()
-  params:add_group("dd_perform", "TAPE", 2)
+  params:add_group("dd_perform", "PERFORM", 3)
+  params:add_option("punch_q", "quantize", F.QUANT_NAMES, 4)
   params:add_control("tape_pitch", "tape pitch",
     controlspec.new(-24, 24, "lin", 1, -12, "st", 1 / 48),
     function(param) return string.format("%+d st", math.floor(param:get() + 0.5)) end)

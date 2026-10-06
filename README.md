@@ -81,7 +81,9 @@ SHIFT is **K2** on norns. CLEAR is grid row 8, column 14.
   to save. Row 7 columns 1-4 pick the kit: tap one for every track, or hold
   it and press track buttons.
 - **PERFORM:** 64 punch-in effects. Hold a pad to play it, SHIFT + pad to
-  latch it. Track buttons mute.
+  latch it. Track buttons mute. While playing, a press waits for the next
+  beat (blinking) before it lands: PARAMS > PERFORM > quantize sets the grid
+  or turns it off.
 
 ## norns
 
