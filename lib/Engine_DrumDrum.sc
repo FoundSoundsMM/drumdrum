@@ -987,25 +987,41 @@ Engine_DrumDrum : CroneEngine {
 		^[LeakDC.ar((body * aenv * 0.55).softclip) * lvl, aenv, 0.001]
 	}
 
-	// HAT: eight sines at a fixed set of metal ratios, SPREAD from all at
-	// PITCH (a ping) out to a wide cluster, PARTS of them, struck in
-	// cosine phase so the hit is a tick. ROLL ratchets it, GAP apart;
-	// SHINE lets the top partials ring past the bottom ones.
+	// HAT: twenty-four sines in eight clusters of three, packed into the
+	// band an octave and a bit above PITCH. A handful of clean sines up
+	// there is a whistle, not a hat: what makes metal is density and
+	// partials that will not sit still. So each cluster is three sines
+	// beating against each other, and SPREAD both widens the band and
+	// jitters every sine's pitch at audio rate, smearing it into a sliver
+	// of noise: 0 a tight, ringing metal, 1 a wide hiss. PARTS is how many
+	// clusters, struck nearly in cosine phase so the hit is a tick. ROLL
+	// ratchets it, GAP apart; SHINE lets the top clusters ring past the
+	// bottom ones.
 	*sinehat { arg t, pr, decm, g;
 		var freq = t[0] * pr, dec = t[1] * decm;
 		var spread = t[2], parts = t[3], roll = t[4], gap = t[5], shine = t[6], lvl = t[7];
-		var ratios = [1, 1.34, 1.73, 2.11, 2.48, 2.93, 3.37, 3.81];
+		var ratios = [1, 1.17, 1.31, 1.48, 1.63, 1.82, 2.03, 2.29];
+		var det = [[-0.021, 0.004, 0.027], [-0.033, 0.009, 0.019], [-0.014, 0.002, 0.038],
+			[-0.029, -0.006, 0.023], [-0.017, 0.011, 0.031], [-0.036, 0.003, 0.015],
+			[-0.024, 0.007, 0.034], [-0.012, -0.003, 0.026]];
 		var train = Engine_DrumDrum.stutter(roll, gap, 0.4);
 		var f = freq * (1 + (g * 0.1));
+		var wide = 0.55 + (spread * 0.9), dsc = 0.5 + (spread * 1.5);
+		var jit = spread.squared * 0.07, jrate = 2500 + (spread * 6000);
 		var sig = Engine_DrumDrum.adds(8, { |k|
 			var on = (parts - k).clip(0, 1);
 			var dk = (dec * ((k + 1) ** ((shine - 0.5) * 1.4))).clip(0.002, 6);
-			var fk = (f * (ratios[k] ** (spread * 2)) * (1 + (k * 0.0031))).clip(500, 19000);
-			SinOsc.ar(fk, pi / 2) * Decay2.ar(train, 0.00005, dk) * on
+			var fc = f * (ratios[k] ** wide);
+			var trio = Engine_DrumDrum.adds(3, { |j|
+				var fk = fc * (1 + (det[k][j] * dsc)) * (1 + (LFNoise1.ar(jrate) * jit));
+				SinOsc.ar(fk.clip(500, 19000), Engine_DrumDrum.cphase(0.75))
+			});
+			trio * Decay2.ar(train, 0.00005, dk) * on
 		});
 		var hold = (roll.round.max(1) - 1) * gap;
 		var env = EnvGen.ar(Env([0, 1, 1, 0.001, 0], [0.0005, hold, dec * 1.5, 0.005], [0, 0, \exp, 0]));
-		^[LeakDC.ar((sig * 0.45).softclip) * lvl, env, 0.002 + hold]
+		sig = sig * 0.75 / (parts.max(1) * 3).sqrt;
+		^[LeakDC.ar(sig.softclip) * lvl, env, 0.002 + hold]
 	}
 
 	// CYM: a wash of twelve partials on a STRETCHed series (1 is
