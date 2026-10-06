@@ -42,16 +42,26 @@
 // harmonic. ANALOG scales all of it, 0 being a clean digital box. Each
 // STRIP adds VCA HISS under its fader, so it rises with the level, pumps
 // with the duck and stops with the mute.
+//
+// CPU: scsynth runs every UGen in a synth whether it is heard or not, so
+// nothing here pays for what is switched off. A voice with no noise and no
+// sample plays a lean twin without those layers; a COLOUR stage at zero,
+// the SPRING with nothing sent to it and the HISS while stopped are paused
+// (see *want). The SynthDefs are cached on disk after the first boot.
 
 Engine_DrumDrum : CroneEngine {
 
 	classvar <nTracks = 8;
-	classvar <defs;
+	classvar <defs, <leanDefs;
 	classvar <chokes;
+	classvar <colourStages;
+	classvar built;
 
-	var <tBus, <driftBus, <mixBus, <dlyBus, <sprBus, <meterBus, <ampBus, <scBus, <duckBus, <posBus;
+	var <tBus, <hissBus, <driftBus, <mixBus, <dryBus, <dlyBus, <sprBus, <meterBus, <ampBus, <scBus, <duckBus, <posBus;
 	var <voiceGroup, <stripGroup, <fxGroup, <perfGroup, <colourGroup;
-	var <strips, <delayS, <springS, <colourS, <duckS, <recS;
+	var <strips, <hissS, <delayS, <springS, <colourS, <duckS, <recS;
+	var naps;         // per node that sleeps when idle: [awake, generation, pause pending]
+	var ssends, sdecay = 2.2;   // what the strips send the spring, and its decay
 	var <tape;       // the recorder's buffer
 	var <stages;     // one group per punch-in stage, in signal order
 	var <punches;    // per stage: the sounding punch-in synth, or nil
@@ -77,8 +87,17 @@ Engine_DrumDrum : CroneEngine {
 			[\dd_fbd1, \dd_fbd2, \dd_fclp, \dd_fsnr, \dd_fprc1, \dd_fprc2, \dd_fhat, \dd_fcym],
 			[\dd_abd1, \dd_abd2, \dd_aclp, \dd_asnr, \dd_aprc1, \dd_aprc2, \dd_ahat, \dd_acym]
 		];
+		leanDefs = defs.collect { |kit| kit.collect { |d| Engine_DrumDrum.leanName(d) } };
 		// a choked voice cuts the one before it; the rest overlap, up to six
 		chokes = [1, 1, 0, 1, 0, 0, 1, 0];
+		// COLOUR's stages in signal order, and the knob that wakes each one
+		// from its sleep (nil: always running)
+		colourStages = [
+			[\dd_c_in, nil], [\dd_c_comp, \comp], [\dd_c_drive, \drive], [\dd_c_crunch, \crunch],
+			[\dd_c_damp, nil], [\dd_c_trans, \trans], [\dd_c_boom, \boom], [\dd_c_mix, nil],
+			[\dd_c_loss, \loss], [\dd_c_noise, \noise], [\dd_c_wow, \wow], [\dd_c_chorus, \chorus],
+			[\dd_c_out, nil]
+		];
 	}
 
 	*new { arg context, doneCallback;
@@ -88,14 +107,17 @@ Engine_DrumDrum : CroneEngine {
 	// ------------------------------------------------------------- layers
 
 	// N1 TYPE: white, pink, dust, tape, metal. Band-passed at N2 TONE.
+	// Select runs every source whichever it picks, so they share one white
+	// and one pink between them: only one is ever heard, so none can tell.
 	*noise { arg type, tone;
+		var w = WhiteNoise.ar, p = PinkNoise.ar;
 		var srcs = [
-			WhiteNoise.ar,
-			PinkNoise.ar * 1.6,
-			(Dust2.ar(900) * 1.5) + (Decay2.ar(Dust.ar(30), 0.0002, 0.003) * WhiteNoise.ar * 3),
-			LPF.ar(PinkNoise.ar * 2, 6000) * (1 + (LFNoise2.kr(5) * 0.3)),
+			w,
+			p * 1.6,
+			(Dust2.ar(900) * 1.5) + (Decay2.ar(Dust.ar(30), 0.0002, 0.003) * w * 3),
+			LPF.ar(p * 2, 6000) * (1 + (LFNoise2.kr(5) * 0.3)),
 			// clocked sample-and-hold noise: bitty and metallic, pitched by TONE
-			Latch.ar(WhiteNoise.ar, Impulse.ar(tone.clip(100, 20000) * 0.5))
+			Latch.ar(w, Impulse.ar(tone.clip(100, 20000) * 0.5))
 		];
 		^BPF.ar(Select.ar(type.clip(0, 4), srcs), tone.clip(40, 16000), 0.9) * 2.2
 	}
@@ -1050,14 +1072,19 @@ Engine_DrumDrum : CroneEngine {
 
 	// ------------------------------------------------------------- wrapper
 
-	*build { arg name, body;
-		SynthDef(name, {
+	// LEAN leaves out the noise layer and the sample layer. A SynthDef
+	// runs every UGen in it whether it is heard or not, and those two cost
+	// a voice 20-55% more with both at zero, which is how most tracks
+	// are. trig picks the lean one whenever it would sound the same.
+	*build { arg name, body, lean = false;
+		Engine_DrumDrum.keep(SynthDef(name, {
 			var out = \out.kr(0), vel = \vel.kr(1), gate = \gate.kr(1);
 			var pitch = \pitch.kr(0), decm = \decm.kr(1), smix = \smix.kr(0);
 			var t = [\t1a, \t1b, \t2a, \t2b, \t3a, \t3b, \t4a, \t4b].collect { |k| k.kr(0.5) };
-			var nz = Engine_DrumDrum.noise(\ntype.kr(1), \ntone.kr(3000));
-			var nlvl = \nlvl.kr(0), ngrain = \ngrain.kr(0);
-			var slvl = \slvl.kr(0), satk = \satk.kr(0.0005), sdec = \sdec.kr(0.6);
+			var nz = if(lean) { 0 } { Engine_DrumDrum.noise(\ntype.kr(1), \ntone.kr(3000)) };
+			var nlvl = if(lean) { 0 } { \nlvl.kr(0) }, ngrain = if(lean) { 0 } { \ngrain.kr(0) };
+			var slvl = if(lean) { 0 } { \slvl.kr(0) };
+			var satk = \satk.kr(0.0005), sdec = \sdec.kr(0.6);
 			// ANALOG: this hit's pitch (semitones), decay, level and
 			// brightness, the strip's drift, and this unit's own tuning
 			var an = \an.kr(0.5);
@@ -1067,8 +1094,8 @@ Engine_DrumDrum : CroneEngine {
 			var res = body.value(t, (pitch + (semi * an)).midiratio, decm * hdec, nz * ngrain);
 			var syn = res[0], env = res[1], atk = res[2];
 			var vk, vb, bright;
-			var smp = Engine_DrumDrum.sampler(\buf.kr(0), \sstart.kr(0), sdec * decm,
-				pitch + \spitch.kr(0), \stone.kr(0), satk, \srev.kr(0)) * slvl;
+			var smp = if(lean) { 0 } { Engine_DrumDrum.sampler(\buf.kr(0), \sstart.kr(0), sdec * decm,
+				pitch + \spitch.kr(0), \stone.kr(0), satk, \srev.kr(0)) * slvl };
 			// MIX: -1 is synth alone, +1 the sample alone, 0 both at full
 			var sg = (1 - smix).clip(0, 1), mg = (1 + smix).clip(0, 1);
 			var sig = (((syn + (nz * env * nlvl)) * sg) + (smp * mg)) * (vel ** 1.4) * hamp;
@@ -1091,25 +1118,32 @@ Engine_DrumDrum : CroneEngine {
 			sig = Select.ar(CheckBadValues.ar(sig, 0, 0) > 0, [sig, DC.ar(0)]);
 			DetectSilence.ar(sig.abs.max(Line.ar(1, 0, hold)), 0.0002, 0.12, doneAction: 2);
 			Out.ar(out, sig);
-		}).add;
+		}));
 	}
 
-	*buildDefs {
+	// a voice's lean twin (see *build)
+	*leanName { arg name; ^(name ++ "_lean").asSymbol }
+
+	// Every voice, full or lean. Both passes roll the same parts in the
+	// same order, so a lean voice is exactly its full twin's instrument.
+	*buildVoices { arg lean = false;
+		var b = { |name, body|
+			Engine_DrumDrum.build(if(lean) { Engine_DrumDrum.leanName(name) } { name }, body, lean) };
 		// the parts this unit was built from: the same every boot
 		thisThread.randSeed = 808;
-		Engine_DrumDrum.build(\dd_bd1, { |t, pr, d, g| Engine_DrumDrum.bd1(t, pr, d, g) });
-		Engine_DrumDrum.build(\dd_bd2, { |t, pr, d, g| Engine_DrumDrum.bd2(t, pr, d, g) });
-		Engine_DrumDrum.build(\dd_clp, { |t, pr, d, g| Engine_DrumDrum.clp(t, pr, d, g) });
-		Engine_DrumDrum.build(\dd_snr, { |t, pr, d, g| Engine_DrumDrum.snr(t, pr, d, g) });
-		Engine_DrumDrum.build(\dd_prc1, { |t, pr, d, g| Engine_DrumDrum.perc(t, pr, d, g) });
-		Engine_DrumDrum.build(\dd_prc2, { |t, pr, d, g| Engine_DrumDrum.tom(t, pr, d, g) });
+		b.(\dd_bd1, { |t, pr, d, g| Engine_DrumDrum.bd1(t, pr, d, g) });
+		b.(\dd_bd2, { |t, pr, d, g| Engine_DrumDrum.bd2(t, pr, d, g) });
+		b.(\dd_clp, { |t, pr, d, g| Engine_DrumDrum.clp(t, pr, d, g) });
+		b.(\dd_snr, { |t, pr, d, g| Engine_DrumDrum.snr(t, pr, d, g) });
+		b.(\dd_prc1, { |t, pr, d, g| Engine_DrumDrum.perc(t, pr, d, g) });
+		b.(\dd_prc2, { |t, pr, d, g| Engine_DrumDrum.tom(t, pr, d, g) });
 		// the old voices up to here rolled 12 parts; roll the seed back to
 		// where they left it, so the hat, the cymbal and the WOOD and FM kits
 		// keep exactly the parts they were built from before
 		thisThread.randSeed = 808;
 		12.do { rrand(-1.0, 1.0) };
-		Engine_DrumDrum.build(\dd_hat, { |t, pr, d, g| Engine_DrumDrum.hat(t, pr, d, g) });
-		Engine_DrumDrum.build(\dd_cym, { |t, pr, d, g| Engine_DrumDrum.cym(t, pr, d, g) });
+		b.(\dd_hat, { |t, pr, d, g| Engine_DrumDrum.hat(t, pr, d, g) });
+		b.(\dd_cym, { |t, pr, d, g| Engine_DrumDrum.cym(t, pr, d, g) });
 
 		// WOOD and FM after WARM, so WARM's parts roll the same as before
 		[
@@ -1120,19 +1154,44 @@ Engine_DrumDrum : CroneEngine {
 			[\dd_abd1, \akick], [\dd_abd2, \melt], [\dd_aclp, \cluster], [\dd_asnr, \spectral],
 			[\dd_aprc1, \shifted], [\dd_aprc2, \scan], [\dd_ahat, \sinehat], [\dd_acym, \wash]
 		].do { |e|
-			Engine_DrumDrum.build(e[0], { |t, pr, d, g| Engine_DrumDrum.perform(e[1], t, pr, d, g) });
+			b.(e[0], { |t, pr, d, g| Engine_DrumDrum.perform(e[1], t, pr, d, g) });
 		};
+	}
+
+	// every SynthDef, as it is built, for buildDefs to hand back
+	*keep { arg def; built.add(def) }
+
+	// Build every SynthDef and return them, added (to SynthDescLib and any
+	// running server) unless ADD is false. Adding one reads it back into a
+	// SynthDesc and sends it, which is most of the time it takes: loadDefs
+	// does neither.
+	*buildDefs { arg add = true;
+		var all;
+		built = List.new;
+		Engine_DrumDrum.buildVoices(false);
+		Engine_DrumDrum.buildVoices(true);
+
+		// ---- HISS: every strip's VCA hiss, one channel each ----
+		// Mostly white with the extremes rolled off, about -80 dB at the
+		// default. It is made here rather than in the strips so that it
+		// can sleep while the sequencer is stopped and lua sends 0, which
+		// takes a third of what the eight strips cost.
+		Engine_DrumDrum.keep(SynthDef(\dd_hiss, { |out = 0, hiss = 0.35|
+			var hs = 8.collect { LPF.ar(HPF.ar(WhiteNoise.ar + (PinkNoise.ar * 0.6), 250), 13000) };
+			Out.ar(out, hs * Lag.kr(hiss, 0.1).squared * 0.0011);
+		}));
 
 		// ---- STRIP: one per track, always running ----
 		// idx is the track, 1-8; sc is where it writes its envelope for the
-		// sidechain, duck where it reads the DUCK's reduction back
-		SynthDef(\dd_strip, { |in = 0, out = 0, meter = 0, dbus = 0, sbus = 0, idx = 0, sc = 0, duck = 0,
+		// sidechain, duck where it reads the DUCK's reduction back, hbus its
+		// channel of the HISS
+		Engine_DrumDrum.keep(SynthDef(\dd_strip, { |in = 0, out = 0, meter = 0, dbus = 0, sbus = 0, idx = 0, sc = 0, duck = 0,
 			drift = 60, level = 0.8, pan = 0, tilt = 0, drive = 0, warmth = 0.3, dsend = 0, ssend = 0,
-			mute = 0, pmute = 0, hiss = 0.35|
+			mute = 0, pmute = 0, hbus = 0|
 			var lagt = 0.05;
 			var sig = In.ar(in, 1);
 			var dr = Lag.kr(drive, lagt), wm = Lag.kr(warmth, lagt), tl = Lag.kr(tilt, lagt);
-			var dgain, dx, dy, mk, amp, st, dk, mt, hs;
+			var dgain, dx, dy, mk, amp, st, dk, mt;
 			// the voices already guard their own output; this catches anything
 			// else on the bus before it can wedge the filters below
 			sig = Select.ar(CheckBadValues.ar(sig, 0, 0) > 0, [sig, DC.ar(0)]);
@@ -1169,10 +1228,8 @@ Engine_DrumDrum : CroneEngine {
 			dk = In.kr(duck, 3);
 			amp = Lag.kr(level.squared * 1.5, 0.02) * mt * (1 - (dk[0] * ((dk[2] - idx).abs > 0.5)));
 			// VCA HISS: under the fader, so it rides the level, the duck and
-			// the mute. Mostly white with the extremes rolled off, about
-			// -80 dB at the default.
-			hs = LPF.ar(HPF.ar(WhiteNoise.ar + (PinkNoise.ar * 0.6), 250), 13000);
-			sig = sig + (hs * Lag.kr(hiss, 0.1).squared * 0.0011);
+			// the mute. Asleep, nothing writes the bus and it reads silence.
+			sig = sig + In.ar(hbus);
 			sig = sig * amp;
 			Out.kr(meter, Amplitude.kr(sig, 0.005, 0.25));
 			st = Pan2.ar(sig, Lag.kr(pan, lagt));
@@ -1183,7 +1240,7 @@ Engine_DrumDrum : CroneEngine {
 			// so the bottom half of the knob is the fine end.
 			Out.ar(dbus, st * Lag.kr(dsend, lagt).squared);
 			Out.ar(sbus, st * Lag.kr(ssend, lagt).squared);
-		}).add;
+		}));
 
 		// ---- DELAY: shared by every track ----
 		// a tape-ish stereo echo. TONE closes a lowpass inside the loop so
@@ -1191,7 +1248,7 @@ Engine_DrumDrum : CroneEngine {
 		// FEEDBACK past 100% blooms rather than explodes, and PING puts the
 		// input in on the left and crosses each repeat to the other side.
 		// TIME glides when it changes, the way a tape delay's does.
-		SynthDef(\dd_delay, { |in = 0, out = 0, duck = 0, dtime = 0.375, fdbk = 0.35, dtone = 3500,
+		Engine_DrumDrum.keep(SynthDef(\dd_delay, { |in = 0, out = 0, duck = 0, dtime = 0.375, fdbk = 0.35, dtone = 3500,
 			ping = 0.6, dret = 0.8|
 			var lagt = 0.08;
 			var x = In.ar(in, 2);
@@ -1209,7 +1266,7 @@ Engine_DrumDrum : CroneEngine {
 			d = (d * 0.8).tanh * 1.25;
 			LocalOut.ar(d);
 			Out.ar(out, d * Lag.kr(dret, lagt) * (1 - In.kr(duck + 1)));
-		}).add;
+		}));
 
 		// ---- SPRING: shared by every track ----
 		// a three-spring tank, after Parker and Valimaki's dispersive model.
@@ -1233,7 +1290,7 @@ Engine_DrumDrum : CroneEngine {
 		// Fender: more of it is louder, longer and dirtier. The lows are
 		// taken out first because a spring cannot hold them anyway, and the
 		// kick going in is what makes a real one crash.
-		SynthDef(\dd_spring, { |in = 0, out = 0, duck = 0, sdecay = 2.2, stone = 3800,
+		Engine_DrumDrum.keep(SynthDef(\dd_spring, { |in = 0, out = 0, duck = 0, sdecay = 2.2, stone = 3800,
 			dwell = 0.4, drip = 0.5, sret = 0.8|
 			var lagt = 0.1;
 			var x = In.ar(in, 2);
@@ -1279,7 +1336,7 @@ Engine_DrumDrum : CroneEngine {
 			l = outs[0] + (outs[1] * 0.6);
 			r = outs[2] + (outs[1] * 0.6);
 			Out.ar(out, [l, r] * 0.55 * Lag.kr(sret, lagt) * (1 - In.kr(duck + 1)));
-		}).add;
+		}));
 
 		// ---- DUCK: the sidechain ----
 		// every strip writes its own envelope (before the fader, after the
@@ -1291,7 +1348,7 @@ Engine_DrumDrum : CroneEngine {
 		//   out + 0  reduction for the strips (0 none, 1 silence)
 		//   out + 1  reduction for the returns
 		//   out + 2  the source track, 1-8, 0 off: that strip does not duck
-		SynthDef(\dd_duck, { |sc = 0, out = 0, scsrc = 0, scamt = 0, screl = 0.25, scfx = 0.5|
+		Engine_DrumDrum.keep(SynthDef(\dd_duck, { |sc = 0, out = 0, scsrc = 0, scamt = 0, screl = 0.25, scfx = 0.5|
 			var on = scsrc > 0;
 			var env = Select.kr((scsrc - 1).clip(0, 7), In.kr(sc, 8)) * on;
 			// AMOUNT is depth in dB: all the way is -30 dB on a full hit
@@ -1300,7 +1357,7 @@ Engine_DrumDrum : CroneEngine {
 			var g = LagUD.kr(db.dbamp, Lag.kr(screl, 0.05), 0.004);
 			var red = 1 - g;
 			Out.kr(out, [red, red * Lag.kr(scfx, 0.05), scsrc]);
-		}).add;
+		}));
 
 		// ---- PERFORM: the punch-ins ----
 		// Each one lives only while its pad is held: it reads the mix bus,
@@ -1317,11 +1374,11 @@ Engine_DrumDrum : CroneEngine {
 		// A reader starts a block behind the write head (LAT), which nobody
 		// can hear and keeps the interpolation off samples not yet written.
 
-		SynthDef(\dd_rec, { |in = 0, buf = 0, pos = 0|
+		Engine_DrumDrum.keep(SynthDef(\dd_rec, { |in = 0, buf = 0, pos = 0|
 			var ph = Phasor.ar(0, 1, 0, BufFrames.kr(buf));
 			BufWr.ar(In.ar(in, 2), buf, ph);
 			Out.kr(pos, A2K.kr(ph));
-		}).add;
+		}));
 
 		// The SAMPLER's recorder (hold S1, tap a step). While armed it
 		// writes its source into a ring all the time, so a take can begin a
@@ -1329,7 +1386,7 @@ Engine_DrumDrum : CroneEngine {
 		// 2 R, 3 the mix as you hear it, 4 one track's voices (tbus). With
 		// det on, the first time the level crosses thr it reports where the
 		// ring was, and sclang takes it from there (see sampBegin).
-		SynthDef(\dd_samp, { |inl = 0, inr = 0, mix = 0, tbus = 0, src = 0, buf = 0,
+		Engine_DrumDrum.keep(SynthDef(\dd_samp, { |inl = 0, inr = 0, mix = 0, tbus = 0, src = 0, buf = 0,
 				pos = 0, lvl = 0, det = 0, thr = 0.03|
 			var l = In.ar(inl), r = In.ar(inr), m = In.ar(mix, 2);
 			var sig = Select.ar(src.clip(0, 4),
@@ -1340,7 +1397,7 @@ Engine_DrumDrum : CroneEngine {
 			Out.kr(pos, A2K.kr(ph));
 			Out.kr(lvl, Amplitude.kr(sig, 0.005, 0.25));
 			SendReply.ar(Trig1.ar((amp > thr) * (det > 0.5), 0.5), '/dd_samp_hit', ph);
-		}).add;
+		}));
 
 		// LOOP: a = how far back from the press the loop starts (s), b = its
 		// length (s), c = where in it playback begins (s), d = rate, negative
@@ -1349,7 +1406,7 @@ Engine_DrumDrum : CroneEngine {
 		// does it come round. The hidden TAPE loops the last LENGTH and
 		// varispeeds it, gliding between rates the way tape does. Each pass
 		// is windowed over 3 ms where it wraps.
-		SynthDef(\dd_pf_loop, { |bus = 0, buf = 0, pos = 0, gate = 1, a = 0, b = 0.5, c = 0, d = 1|
+		Engine_DrumDrum.keep(SynthDef(\dd_pf_loop, { |bus = 0, buf = 0, pos = 0, gate = 1, a = 0, b = 0.5, c = 0, d = 1|
 			var sr = SampleRate.ir, frames = BufFrames.kr(buf);
 			var p0 = Latch.kr(In.kr(pos), Impulse.kr(0));
 			var len = (Lag.kr(b, 0.05).max(0.005) * sr);
@@ -1362,7 +1419,7 @@ Engine_DrumDrum : CroneEngine {
 			var dry = In.ar(bus, 2);
 			var env = EnvGen.kr(Env.asr(0.004, 1, 0.012), gate, doneAction: 2);
 			ReplaceOut.ar(bus, (dry * (1 - env)) + (wet * env));
-		}).add;
+		}));
 
 		// STOP: tape stop and spin-back. The read head starts on the write
 		// head and its speed goes from 1 to b over a seconds: b = 0 is a
@@ -1370,7 +1427,7 @@ Engine_DrumDrum : CroneEngine {
 		// than the write head it falls behind it, so this is the live mix
 		// slowing down, not a loop. The top closes as it slows, and it fades
 		// out as it stops so nothing is left hanging on one sample.
-		SynthDef(\dd_pf_stop, { |bus = 0, buf = 0, pos = 0, gate = 1, a = 0.5, b = 0|
+		Engine_DrumDrum.keep(SynthDef(\dd_pf_stop, { |bus = 0, buf = 0, pos = 0, gate = 1, a = 0.5, b = 0|
 			var sr = SampleRate.ir, frames = BufFrames.kr(buf);
 			var p0 = Latch.kr(In.kr(pos), Impulse.kr(0));
 			var rate = EnvGen.ar(Env([1, b], [a.max(0.01)], -3));
@@ -1384,54 +1441,54 @@ Engine_DrumDrum : CroneEngine {
 			var env = EnvGen.kr(Env.asr(0.004, 1, 0.012), gate, doneAction: 2);
 			wet = LPF.ar(wet, (rate.abs * 18000).clip(150, 20000)) * amp;
 			ReplaceOut.ar(bus, (dry * (1 - env)) + (wet * env));
-		}).add;
+		}));
 
 		// GATE: chops the mix on the beat grid. a = a chop's length in
 		// beats, b = the length of a beat (s), c = where in the bar the press
 		// landed (beats), d = how much of each chop is open. Counted from
 		// the bar, so a new a while held stays on the grid.
-		SynthDef(\dd_pf_gate, { |bus = 0, gate = 1, a = 0.25, b = 0.5, c = 0, d = 0.5|
+		Engine_DrumDrum.keep(SynthDef(\dd_pf_gate, { |bus = 0, gate = 1, a = 0.25, b = 0.5, c = 0, d = 0.5|
 			var beats = c + Sweep.ar(0, b.reciprocal);
 			var open = Lag.ar(((beats / a).frac < d), 0.0015);
 			var dry = In.ar(bus, 2);
 			var env = EnvGen.kr(Env.asr(0.004, 1, 0.012), gate, doneAction: 2);
 			ReplaceOut.ar(bus, dry * (1 - (env * (1 - open))));
-		}).add;
+		}));
 
 		// CRUSH: a = bits, b = sample rate (Hz)
-		SynthDef(\dd_pf_crush, { |bus = 0, gate = 1, a = 8, b = 8000|
+		Engine_DrumDrum.keep(SynthDef(\dd_pf_crush, { |bus = 0, gate = 1, a = 8, b = 8000|
 			var dry = In.ar(bus, 2);
 			var q = 2 ** (Lag.kr(a, 0.02) - 1);
 			var wet = Latch.ar(dry, Impulse.ar(Lag.kr(b, 0.02)));
 			var env = EnvGen.kr(Env.asr(0.004, 1, 0.012), gate, doneAction: 2);
 			wet = (wet * q).round / q;
 			ReplaceOut.ar(bus, (dry * (1 - env)) + (wet * env * 0.9));
-		}).add;
+		}));
 
 		// LOWPASS / HIGHPASS: a = cutoff (Hz), b = rq. A press sweeps in from
 		// wide open; a new cutoff while held glides there.
-		SynthDef(\dd_pf_lpf, { |bus = 0, gate = 1, a = 1000, b = 0.4|
+		Engine_DrumDrum.keep(SynthDef(\dd_pf_lpf, { |bus = 0, gate = 1, a = 1000, b = 0.4|
 			var f = Lag.kr(a, 0.1);
 			var fc = f * ((20000 / f) ** EnvGen.kr(Env([1, 0], [0.15], -3)));
 			var dry = In.ar(bus, 2);
 			var env = EnvGen.kr(Env.asr(0.004, 1, 0.03), gate, doneAction: 2);
 			var wet = RLPF.ar(dry, fc.clip(30, 20000), b);
 			ReplaceOut.ar(bus, (dry * (1 - env)) + (wet * env));
-		}).add;
+		}));
 
-		SynthDef(\dd_pf_hpf, { |bus = 0, gate = 1, a = 1000, b = 0.4|
+		Engine_DrumDrum.keep(SynthDef(\dd_pf_hpf, { |bus = 0, gate = 1, a = 1000, b = 0.4|
 			var f = Lag.kr(a, 0.1);
 			var fc = f * ((20 / f) ** EnvGen.kr(Env([1, 0], [0.15], -3)));
 			var dry = In.ar(bus, 2);
 			var env = EnvGen.kr(Env.asr(0.004, 1, 0.03), gate, doneAction: 2);
 			var wet = RHPF.ar(dry, fc.clip(20, 18000), b);
 			ReplaceOut.ar(bus, (dry * (1 - env)) + (wet * env));
-		}).add;
+		}));
 
 		// ECHO: a dub throw. While held the mix goes into a ping-pong echo;
 		// let go and the input closes but the echoes ring on, fading over c
 		// seconds before the synth frees. a = time (s), b = feedback.
-		SynthDef(\dd_pf_echo, { |bus = 0, gate = 1, a = 0.25, b = 0.6, c = 4|
+		Engine_DrumDrum.keep(SynthDef(\dd_pf_echo, { |bus = 0, gate = 1, a = 0.25, b = 0.6, c = 4|
 			var dry = In.ar(bus, 2);
 			var life = EnvGen.kr(Env.asr(0, 1, c, -4), gate, doneAction: 2);
 			var send = EnvGen.kr(Env.asr(0.003, 1, 0.01), gate);
@@ -1442,7 +1499,7 @@ Engine_DrumDrum : CroneEngine {
 			d = (d * 0.9).tanh / 0.9;
 			LocalOut.ar(d);
 			ReplaceOut.ar(bus, dry + (d * life));
-		}).add;
+		}));
 
 		// ---- COLOUR: the master ----
 		// BUSS, after Ableton's Drum Buss:
@@ -1450,116 +1507,128 @@ Engine_DrumDrum : CroneEngine {
 		// then Pappus' colour stage: tilt > loss > envelope-following
 		// noise > wow, then a chorus and the level, always wet; BYPASS is
 		// the way out.
-		SynthDef(\dd_colour, { |in = 0, out = 0, ampBus = 0,
-			drive = 0, drivetype = 1, crunch = 0, bussdamp = 20000, trans = 0, comp = 0,
-			boom = 0, boomfreq = 55, boomdecay = 0.4, ctilt = 0, bussmix = 1,
-			loss = 0, wow = 0, noise = 0, noisetype = 2, noisedecay = 0.25, noisetone = 1200,
-			chorus = 0, chrate = 0.5, chdepth = 0.5, chbbd = 0.3,
-			outlvl = 1, bypass = 0|
-			var lagt = 0.08, envref = 0.25;
+		//
+		// Each stage is a synth of its own, working in place on the mix bus
+		// in signal order (colourStages), so that one whose knob is at zero
+		// can be paused: a SynthDef runs every UGen in it whether it is heard
+		// or not, and with everything at zero, as it starts, COLOUR ran some
+		// two hundred of them for nothing. A stage at zero passes the signal
+		// through untouched, so pausing it there changes nothing; see *want.
+		// The first stage keeps a copy of what came in on `dry`, for MIX,
+		// the noise's envelope and BYPASS.
+		Engine_DrumDrum.keep(SynthDef(\dd_c_in, { |bus = 0, dry = 0|
 			// the strips guard their own inputs, but the returns and the
 			// punch-ins land on this bus after them: a bad value here would
 			// wedge every filter below for good
-			var dry = In.ar(in, 2).collect { |c| Select.ar(CheckBadValues.ar(c, 0, 0) > 0, [c, DC.ar(0)]) };
-			var sig = dry;
-			var dr = Lag.kr(drive, lagt), cn = Lag.kr(crunch, lagt), tr = Lag.kr(trans, lagt);
-			var cp = Lag.kr(comp, lagt), bm = Lag.kr(boom, lagt), bmix = Lag.kr(bussmix, lagt);
-			var ls = Lag.kr(loss, lagt).clip(0, 1), ns = Lag.kr(noise, lagt);
-			var kw = Lag.kr(wow, lagt).clip(0, 1);
-			var tl = Lag.kr(ctilt, lagt);
+			var sig = In.ar(bus, 2).collect { |c| Select.ar(CheckBadValues.ar(c, 0, 0) > 0, [c, DC.ar(0)]) };
+			ReplaceOut.ar(bus, sig);
+			Out.ar(dry, sig);
+		}));
+
+		// ---- COMP ----
+		// one knob, the way Drum Buss has one button: a fast peak
+		// compressor whose threshold falls and ratio climbs together
+		// (-21 dB at 6:1 at the top), with most of the level made back
+		Engine_DrumDrum.keep(SynthDef(\dd_c_comp, { |bus = 0, comp = 0|
+			var sig = In.ar(bus, 2), cp = Lag.kr(comp, 0.08);
+			var mono = (sig[0] + sig[1]) * 0.5;
+			var cthr = 0.5 ** (cp * 3.5);
+			var cslope = (1 + (cp * 5)).reciprocal;
+			ReplaceOut.ar(bus, Compander.ar(sig, mono, cthr, 1, cslope, 0.001, 0.12)
+				* (cthr.reciprocal ** ((1 - cslope) * 0.7)));
+		}));
+
+		// ---- DRIVE ----
+		// three circuits, each with makeup fitted so a peak at -9 dB
+		// stays there: turning DRIVE mostly changes density, and the mix
+		// gets a few dB louder over the knob, not ten.
+		//   SOFT    waveshaping: a biased tanh, so the halves round off
+		//           differently and a little second harmonic comes up
+		//   MEDIUM  limiting: a hard-kneed limiter after a lift at 2.4k,
+		//           so the high mids push into it first
+		//   HARD    clipping after a low shelf, so the low end hits it
+		Engine_DrumDrum.keep(SynthDef(\dd_c_drive, { |bus = 0, drive = 0, drivetype = 1|
+			var sig = In.ar(bus, 2), dr = Lag.kr(drive, 0.08);
 			var dtype = (drivetype - 1).clip(0, 2);
-			var env, mono, cthr, cslope, dg, half, sx, soft, mx, med, hx, hard, shaped;
-			var lo, hi, cg, chi, tlo, thi, tmono, fast, slow, att, pres, gdb;
-			var bf, brq, bsrc, bring;
-			var lmono, lchain, lthr, lossmono, ldry, lmix, lon, nwash, kwd, kwf, kwm;
-			var cm, cb, cdt, cwet, cgn;
-			var outsig;
-
-			env = Amplitude.ar((dry[0] + dry[1]) * 0.5, 0.002, Lag.kr(noisedecay, lagt)).clip(0, 1);
-			env = (envref * ((env / envref).max(0) ** 2)).clip(0, 1);
-
-			// ---- COMP ----
-			// one knob, the way Drum Buss has one button: a fast peak
-			// compressor whose threshold falls and ratio climbs together
-			// (-21 dB at 6:1 at the top), with most of the level made back
-			mono = (sig[0] + sig[1]) * 0.5;
-			cthr = 0.5 ** (cp * 3.5);
-			cslope = (1 + (cp * 5)).reciprocal;
-			sig = Compander.ar(sig, mono, cthr, 1, cslope, 0.001, 0.12)
-				* (cthr.reciprocal ** ((1 - cslope) * 0.7));
-
-			// ---- DRIVE ----
-			// three circuits, each with makeup fitted so a peak at -9 dB
-			// stays there: turning DRIVE mostly changes density, and the mix
-			// gets a few dB louder over the knob, not ten.
-			//   SOFT    waveshaping: a biased tanh, so the halves round off
-			//           differently and a little second harmonic comes up
-			//   MEDIUM  limiting: a hard-kneed limiter after a lift at 2.4k,
-			//           so the high mids push into it first
-			//   HARD    clipping after a low shelf, so the low end hits it
-			dg = 1 + (dr.squared * 30);
-			half = dg * 0.36;
-			sx = sig * dg;
-			soft = ((sx + 0.15).tanh - 0.15.tanh) * (0.36 / ((half + 0.15).tanh - 0.15.tanh));
-			mx = BPeakEQ.ar(sig, 2400, 0.9, dr * 7) * dg;
-			med = (mx / (((mx.abs ** 4) + 1) ** 0.25)) * (0.36 / (half / (((half ** 4) + 1) ** 0.25)));
-			hx = BLowShelf.ar(sig, 110, 1, dr * 9) * dg;
-			hard = hx.clip2(1) * (0.36 / half.min(1));
-			shaped = 2.collect { |c| Select.ar(dtype, [soft[c], med[c], hard[c]]) };
+			var dg = 1 + (dr.squared * 30);
+			var half = dg * 0.36;
+			var sx = sig * dg;
+			var soft = ((sx + 0.15).tanh - 0.15.tanh) * (0.36 / ((half + 0.15).tanh - 0.15.tanh));
+			var mx = BPeakEQ.ar(sig, 2400, 0.9, dr * 7) * dg;
+			var med = (mx / (((mx.abs ** 4) + 1) ** 0.25)) * (0.36 / (half / (((half ** 4) + 1) ** 0.25)));
+			var hx = BLowShelf.ar(sig, 110, 1, dr * 9) * dg;
+			var hard = hx.clip2(1) * (0.36 / half.min(1));
+			var shaped = 2.collect { |c| Select.ar(dtype, [soft[c], med[c], hard[c]]) };
 			shaped = LPF.ar(LeakDC.ar(shaped), (18000 - (dr * 6000)) * (1 - (dtype * 0.1)));
-			sig = XFade2.ar(sig, shaped, ((dr * 4).clip(0, 1) * 2) - 1);
+			ReplaceOut.ar(bus, XFade2.ar(sig, shaped, ((dr * 4).clip(0, 1) * 2) - 1));
+		}));
 
-			// ---- CRUNCH ----
-			// sine-shaped distortion on the mid-highs only: split at 1.4k,
-			// the top half through a sine shaper that folds over a little
-			// past its peak, the bottom left alone
-			lo = LPF.ar(LPF.ar(sig, 1400), 1400);
-			hi = sig - lo;
-			cg = 1 + (cn.squared * 16);
-			chi = (hi * cg).clip2(2.2).sin * (0.25 / (cg * 0.25).clip(0, 1.5).sin);
-			sig = lo + XFade2.ar(hi, chi, (cn.sqrt * 2) - 1);
+		// ---- CRUNCH ----
+		// sine-shaped distortion on the mid-highs only: split at 1.4k,
+		// the top half through a sine shaper that folds over a little
+		// past its peak, the bottom left alone
+		Engine_DrumDrum.keep(SynthDef(\dd_c_crunch, { |bus = 0, crunch = 0|
+			var sig = In.ar(bus, 2), cn = Lag.kr(crunch, 0.08);
+			var lo = LPF.ar(LPF.ar(sig, 1400), 1400);
+			var hi = sig - lo;
+			var cg = 1 + (cn.squared * 16);
+			var chi = (hi * cg).clip2(2.2).sin * (0.25 / (cg * 0.25).clip(0, 1.5).sin);
+			ReplaceOut.ar(bus, lo + XFade2.ar(hi, chi, (cn.sqrt * 2) - 1));
+		}));
 
-			// ---- DAMP ----
-			sig = LPF.ar(sig, Lag.kr(bussdamp, lagt).clip(200, 20000));
+		// ---- DAMP ----
+		Engine_DrumDrum.keep(SynthDef(\dd_c_damp, { |bus = 0, bussdamp = 20000|
+			ReplaceOut.ar(bus, LPF.ar(In.ar(bus, 2), Lag.kr(bussdamp, 0.08).clip(200, 20000)));
+		}));
 
-			// ---- TRANSIENTS ----
-			// above 100 Hz. A fast envelope over a slow one finds the
-			// attack; either way round TRANS adds attack, then positive
-			// lifts what follows (fuller) and negative takes it away
-			// (tighter, less room and rattle)
-			tlo = LPF.ar(LPF.ar(sig, 100), 100);
-			thi = sig - tlo;
-			tmono = (thi[0] + thi[1]) * 0.5;
-			fast = Amplitude.ar(tmono, 0.0005, 0.03);
-			slow = Amplitude.ar(tmono, 0.02, 0.3);
-			att = ((fast + 0.0003) / (slow + 0.0003)).ampdb.clip(0, 18);
-			pres = (slow * 30).clip(0, 1);
-			gdb = (att * tr.abs * 0.5) + (tr * 5 * (1 - (att / 6).clip(0, 1)) * pres);
-			sig = tlo + (thi * gdb.clip(-18, 14).dbamp);
+		// ---- TRANSIENTS ----
+		// above 100 Hz. A fast envelope over a slow one finds the
+		// attack; either way round TRANS adds attack, then positive
+		// lifts what follows (fuller) and negative takes it away
+		// (tighter, less room and rattle)
+		Engine_DrumDrum.keep(SynthDef(\dd_c_trans, { |bus = 0, trans = 0|
+			var sig = In.ar(bus, 2), tr = Lag.kr(trans, 0.08);
+			var tlo = LPF.ar(LPF.ar(sig, 100), 100);
+			var thi = sig - tlo;
+			var tmono = (thi[0] + thi[1]) * 0.5;
+			var fast = Amplitude.ar(tmono, 0.0005, 0.03);
+			var slow = Amplitude.ar(tmono, 0.02, 0.3);
+			var att = ((fast + 0.0003) / (slow + 0.0003)).ampdb.clip(0, 18);
+			var pres = (slow * 30).clip(0, 1);
+			var gdb = (att * tr.abs * 0.5) + (tr * 5 * (1 - (att / 6).clip(0, 1)) * pres);
+			ReplaceOut.ar(bus, tlo + (thi * gdb.clip(-18, 14).dbamp));
+		}));
 
-			// ---- BOOM ----
-			// a resonator at FREQ that every hit's low end rings, ringing
-			// for DECAY, soft-limited so a long one cannot run away
-			bf = Lag.kr(boomfreq, 0.1);
-			brq = (2.2 / (Lag.kr(boomdecay, 0.1) * bf)).clip(0.005, 1);
-			bsrc = LPF.ar(LPF.ar((sig[0] + sig[1]) * 0.5, bf * 3), bf * 3);
-			bring = (Resonz.ar(bsrc, bf, brq) * bm.squared * 12).tanh * 0.4;
-			sig = sig + bring;
+		// ---- BOOM ----
+		// a resonator at FREQ that every hit's low end rings, ringing
+		// for DECAY, soft-limited so a long one cannot run away
+		Engine_DrumDrum.keep(SynthDef(\dd_c_boom, { |bus = 0, boom = 0, boomfreq = 55, boomdecay = 0.4|
+			var sig = In.ar(bus, 2), bm = Lag.kr(boom, 0.08);
+			var bf = Lag.kr(boomfreq, 0.1);
+			var brq = (2.2 / (Lag.kr(boomdecay, 0.1) * bf)).clip(0.005, 1);
+			var bsrc = LPF.ar(LPF.ar((sig[0] + sig[1]) * 0.5, bf * 3), bf * 3);
+			var bring = (Resonz.ar(bsrc, bf, brq) * bm.squared * 12).tanh * 0.4;
+			ReplaceOut.ar(bus, sig + bring);
+		}));
 
-			// ---- MIX ----
-			sig = (dry * (1 - bmix)) + (sig * bmix);
-
-			// ---- TILT ----
+		// ---- MIX, then TILT ----
+		Engine_DrumDrum.keep(SynthDef(\dd_c_mix, { |bus = 0, dry = 0, bussmix = 1, ctilt = 0|
+			var bmix = Lag.kr(bussmix, 0.08), tl = Lag.kr(ctilt, 0.08);
+			var sig = (In.ar(dry, 2) * (1 - bmix)) + (In.ar(bus, 2) * bmix);
 			sig = BLowShelf.ar(sig, 900, 0.7, tl * -6);
-			sig = BHiShelf.ar(sig, 900, 0.7, tl * 6);
+			ReplaceOut.ar(bus, BHiShelf.ar(sig, 900, 0.7, tl * 6));
+		}));
 
-			// ---- LOSS: a codec falling apart ----
-			// bins under a level-tracking threshold are thrown away and the
-			// bandwidth closes from the top. Mono, as joint stereo is at low
-			// bitrates. Sine window at hop 0.5 is exactly COLA.
-			lmono = (sig[0] + sig[1]) * 0.5;
-			lchain = FFT(LocalBuf(512).clear, lmono, 0.5, 0);
-			lthr = Amplitude.kr(lmono, 0.02, 0.15) * 163 * ls.squared * 0.45;
+		// ---- LOSS: a codec falling apart ----
+		// bins under a level-tracking threshold are thrown away and the
+		// bandwidth closes from the top. Mono, as joint stereo is at low
+		// bitrates. Sine window at hop 0.5 is exactly COLA.
+		Engine_DrumDrum.keep(SynthDef(\dd_c_loss, { |bus = 0, loss = 0|
+			var sig = In.ar(bus, 2), ls = Lag.kr(loss, 0.08).clip(0, 1);
+			var lmono = (sig[0] + sig[1]) * 0.5;
+			var lchain = FFT(LocalBuf(512).clear, lmono, 0.5, 0);
+			var lthr = Amplitude.kr(lmono, 0.02, 0.15) * 163 * ls.squared * 0.45;
+			var lossmono, ldry, lmix, lon;
 			lchain = PV_MagAbove(lchain, lthr);
 			lchain = PV_BrickWall(lchain, 0 - ((ls ** 2.2) * 0.86));
 			lossmono = IFFT(lchain);
@@ -1576,13 +1645,17 @@ Engine_DrumDrum : CroneEngine {
 			// at zero the stage is left out altogether: the undelayed signal,
 			// crossfaded in and out as LOSS leaves and comes back to zero
 			lon = Lag.kr(loss > 0, 0.05);
-			sig = (sig * (1 - lon))
-				+ (((ldry * (1 - lmix)) + ([lossmono, lossmono] * lmix)) * lon);
+			ReplaceOut.ar(bus, (sig * (1 - lon))
+				+ (((ldry * (1 - lmix)) + ([lossmono, lossmono] * lmix)) * lon));
+		}));
 
-			// ---- NOISE ----
-			// riding the drums' own envelope, so it opens with every hit and
-			// N.DEC is how long it hangs on after
-			nwash = 2.collect {
+		// ---- NOISE ----
+		// riding the drums' own envelope, so it opens with every hit and
+		// N.DEC is how long it hangs on after
+		Engine_DrumDrum.keep(SynthDef(\dd_c_noise, { |bus = 0, dry = 0, noise = 0, noisetype = 2, noisedecay = 0.25, noisetone = 1200|
+			var d = In.ar(dry, 2), envref = 0.25;
+			var env = Amplitude.ar((d[0] + d[1]) * 0.5, 0.002, Lag.kr(noisedecay, 0.08)).clip(0, 1);
+			var nwash = 2.collect {
 				Select.ar((noisetype - 1).clip(0, 4), [
 					WhiteNoise.ar,
 					PinkNoise.ar * 1.6,
@@ -1591,62 +1664,116 @@ Engine_DrumDrum : CroneEngine {
 					LPF.ar(HPF.ar(PinkNoise.ar * 2, 2000), 9000) * (1 + (LFNoise2.kr(3) * 0.3))
 				])
 			};
-			nwash = BPF.ar(nwash, Lag.kr(noisetone, lagt).clip(60, 12000), 0.8) * 2.5;
-			sig = sig + (nwash * env * ns * 4);
+			env = (envref * ((env / envref).max(0) ** 2)).clip(0, 1);
+			nwash = BPF.ar(nwash, Lag.kr(noisetone, 0.08).clip(60, 12000), 0.8) * 2.5;
+			ReplaceOut.ar(bus, In.ar(bus, 2) + (nwash * env * Lag.kr(noise, 0.08) * 4));
+		}));
 
-			// ---- WOW ----
-			// cubic depth: the bottom of the knob is the slow unsteadiness
-			// that stops a drum machine sounding rigid, only the top seasick
-			kwd = ((kw * 0.0012) + ((kw ** 3) * 0.026));
-			kwf = (kw ** 4) * 0.006;
-			kwm = (LFNoise2.kr([0.08 + (kw * 0.7), 0.067 + (kw * 0.55)]) * kwd)
+		// ---- WOW ----
+		// cubic depth: the bottom of the knob is the slow unsteadiness
+		// that stops a drum machine sounding rigid, only the top seasick.
+		// The half millisecond under the wobble (so it never asks for a
+		// negative delay) glides in as WOW leaves zero, and the stage
+		// crossfades in from the straight signal, so at zero it is no
+		// delay at all and can be paused.
+		Engine_DrumDrum.keep(SynthDef(\dd_c_wow, { |bus = 0, wow = 0|
+			var sig = In.ar(bus, 2), kw = Lag.kr(wow, 0.08).clip(0, 1);
+			var on = Lag.kr(wow > 0, 0.05);
+			var kwd = ((kw * 0.0012) + ((kw ** 3) * 0.026));
+			var kwf = (kw ** 4) * 0.006;
+			var kwm = (LFNoise2.kr([0.08 + (kw * 0.7), 0.067 + (kw * 0.55)]) * kwd)
 				+ (LFNoise2.kr([4.7, 6.1]) * kwf);
-			sig = DelayC.ar(sig, 0.08, Lag.kr(0.0005 + kwd, 0.3) + kwm);
+			var wet = DelayC.ar(sig, 0.08, Lag.kr(((wow > 0) * 0.0005) + kwd, 0.3) + kwm);
+			ReplaceOut.ar(bus, (sig * (1 - on)) + (wet * on));
+		}));
 
-			// ---- CHORUS ----
-			// after the Juno's: each side through a bucket-brigade delay of a
-			// few milliseconds swept by a triangle, left and right swept the
-			// opposite way, so it widens as it thickens. DEPTH is how far it
-			// sweeps, RATE how fast. BBD is how much of the bucket brigade
-			// comes with it: the top rolling off, its compander rounding the
-			// peaks, a breath of clock hiss. CHORUS all the way is half and
-			// half, as the Juno's is.
-			cm = Lag.kr(chorus, lagt);
-			cb = Lag.kr(chbbd, lagt);
-			cdt = 0.0035 + (LFTri.kr(Lag.kr(chrate, lagt), [0, 2]) * Lag.kr(chdepth, lagt) * 0.0025);
-			cwet = DelayC.ar(sig, 0.01, cdt);
+		// ---- CHORUS ----
+		// after the Juno's: each side through a bucket-brigade delay of a
+		// few milliseconds swept by a triangle, left and right swept the
+		// opposite way, so it widens as it thickens. DEPTH is how far it
+		// sweeps, RATE how fast. BBD is how much of the bucket brigade
+		// comes with it: the top rolling off, its compander rounding the
+		// peaks, a breath of clock hiss. CHORUS all the way is half and
+		// half, as the Juno's is.
+		Engine_DrumDrum.keep(SynthDef(\dd_c_chorus, { |bus = 0, chorus = 0, chrate = 0.5, chdepth = 0.5, chbbd = 0.3|
+			var lagt = 0.08, sig = In.ar(bus, 2);
+			var cm = Lag.kr(chorus, lagt), cb = Lag.kr(chbbd, lagt);
+			var cdt = 0.0035 + (LFTri.kr(Lag.kr(chrate, lagt), [0, 2]) * Lag.kr(chdepth, lagt) * 0.0025);
+			var cwet = DelayC.ar(sig, 0.01, cdt);
+			var cgn = 1 + (cb * 2);
 			cwet = LPF.ar(LPF.ar(cwet, 14000 * (0.22 ** cb)), 14000 * (0.22 ** cb));
-			cgn = 1 + (cb * 2);
 			cwet = ((cwet * cgn).tanh / cgn.tanh) + (PinkNoise.ar([1, 1]) * cb * 0.0015);
-			sig = sig + ((cwet - sig) * cm * 0.5);
+			ReplaceOut.ar(bus, sig + ((cwet - sig) * cm * 0.5));
+		}));
 
-			outsig = sig * Lag.kr(outlvl, lagt);
-			outsig = [
-				Select.ar(bypass, [outsig[0], dry[0]]),
-				Select.ar(bypass, [outsig[1], dry[1]])
-			];
+		// ---- the level, BYPASS and the way out ----
+		Engine_DrumDrum.keep(SynthDef(\dd_c_out, { |bus = 0, dry = 0, out = 0, ampBus = 0, outlvl = 1, bypass = 0|
+			var sig = In.ar(bus, 2) * Lag.kr(outlvl, 0.08), d = In.ar(dry, 2);
+			sig = [Select.ar(bypass, [sig[0], d[0]]), Select.ar(bypass, [sig[1], d[1]])];
 			// a safety, not a sound: Limiter delays by twice its window, so a
 			// 1 ms window keeps it to 2 ms (10 ms was 20 ms late)
-			outsig = Limiter.ar(outsig, 0.95, 0.001);
+			sig = Limiter.ar(sig, 0.95, 0.001);
 			// and the last word before norns' own mixer: one NaN out of here
 			// lodges in its reverb and compressor, which outlive the script,
 			// and nothing makes a sound again until norns restarts
-			outsig = outsig.collect { |c| Select.ar(CheckBadValues.ar(c, 0, 0) > 0, [c, DC.ar(0)]) };
-			Out.kr(ampBus, Amplitude.kr((outsig[0] + outsig[1]) * 0.5, 0.01, 0.2));
-			Out.ar(out, outsig);
-		}).add;
+			sig = sig.collect { |c| Select.ar(CheckBadValues.ar(c, 0, 0) > 0, [c, DC.ar(0)]) };
+			Out.kr(ampBus, Amplitude.kr((sig[0] + sig[1]) * 0.5, 0.01, 0.2));
+			Out.ar(out, sig);
+		}));
+
+		all = built;
+		built = nil;
+		if (add) { all.do(_.add) };
+		^all
 	}
 
 	// ---------------------------------------------------------------- alloc
 
+	// Building every SynthDef keeps sclang busy for a while (twice as long
+	// since every voice has a lean twin), so the first boot writes them to
+	// disk and every boot after loads them straight into the server. The
+	// folder is named for this file's contents and the SC version, so an
+	// edited engine builds afresh, and the folders of older ones go.
+	loadDefs {
+		var s = context.server;
+		var root = Platform.userHomeDir +/+ "dust/data/drumdrum/defs";
+		var key = (File.readAllString(this.class.filenameSymbol.asString) ++ Main.version).hash.asHexString;
+		var dir = root +/+ key;
+		var defs, cached;
+		if (File.exists(dir +/+ "ok").not) {
+			defs = Engine_DrumDrum.buildDefs(false);
+			cached = try {
+				(root +/+ "*").pathMatch.do { |old|
+					(old +/+ "*").pathMatch.do { |f| File.delete(f) };
+					File.delete(old);
+				};
+				File.mkdir(dir);
+				defs.do { |d|
+					File.use(dir +/+ d.name ++ ".scsyndef", "wb", { |f| f.putAll(d.asBytes) });
+				};
+				File.use(dir +/+ "ok", "w", { |f| f.write(key) });
+				true
+			} { |err|
+				("drumdrum: synthdefs not cached: " ++ err.errorString).postln;
+				false
+			};
+			// nowhere to keep them: straight to the server, as they are
+			if (cached.not) { defs.do { |d| d.send(s) }; s.sync; ^this };
+		};
+		s.sendMsg(\d_loadDir, dir);
+		s.sync;
+	}
+
 	alloc {
 		var s = context.server;
 
-		Engine_DrumDrum.buildDefs;
+		this.loadDefs;
 
 		tBus = Array.fill(nTracks, { Bus.audio(s, 1) });
+		hissBus = Bus.audio(s, nTracks);
 		driftBus = Bus.control(s, nTracks);
 		mixBus = Bus.audio(s, 2);
+		dryBus = Bus.audio(s, 2);
 		dlyBus = Bus.audio(s, 2);
 		sprBus = Bus.audio(s, 2);
 		posBus = Bus.control(s, 1);
@@ -1655,6 +1782,8 @@ Engine_DrumDrum : CroneEngine {
 		scBus = Bus.control(s, nTracks);
 		duckBus = Bus.control(s, 3);
 		mlast = Array.fill(nTracks, { 0 });
+		naps = IdentityDictionary.new;
+		ssends = Array.fill(nTracks, { 0 });
 
 		voiceGroup = Group.new(context.xg, \addToHead);
 		stripGroup = Group.after(voiceGroup);
@@ -1689,8 +1818,11 @@ Engine_DrumDrum : CroneEngine {
 
 		s.sync;
 
+		// the hiss ahead of the strips, hissing as they did until lua says
+		hissS = Synth(\dd_hiss, [\out, hissBus.index], stripGroup);
+		naps[hissS] = [true, 0, false];
 		strips = nTracks.collect { |i|
-			Synth(\dd_strip, [\in, tBus[i].index, \out, mixBus.index,
+			Synth(\dd_strip, [\in, tBus[i].index, \out, mixBus.index, \hbus, hissBus.index + i,
 				\meter, meterBus.index + i, \dbus, dlyBus.index, \sbus, sprBus.index,
 				\idx, i + 1, \sc, scBus.index + i, \duck, duckBus.index,
 				\drift, driftBus.index + i],
@@ -1700,29 +1832,44 @@ Engine_DrumDrum : CroneEngine {
 		duckS = Synth(\dd_duck, [\sc, scBus.index, \out, duckBus.index], fxGroup);
 		delayS = Synth(\dd_delay, [\in, dlyBus.index, \out, mixBus.index,
 			\duck, duckBus.index], fxGroup, \addToTail);
-		springS = Synth(\dd_spring, [\in, sprBus.index, \out, mixBus.index,
+		// asleep until a track sends to it
+		springS = Synth.newPaused(\dd_spring, [\in, sprBus.index, \out, mixBus.index,
 			\duck, duckBus.index], fxGroup, \addToTail);
+		naps[springS] = [false, 0, false];
 		// the recorder first, then the stages in signal order
 		recS = Synth(\dd_rec, [\in, mixBus.index, \buf, tape.bufnum, \pos, posBus.index], perfGroup);
 		stages = 8.collect { Group.tail(perfGroup) };
-		colourS = Synth(\dd_colour, [\in, mixBus.index, \out, context.out_b.index,
-			\ampBus, ampBus.index], colourGroup);
+		// every stage that has a knob starts asleep: they all start at zero
+		colourS = colourStages.collect { |st|
+			var ca = [\bus, mixBus.index, \dry, dryBus.index, \out, context.out_b.index,
+				\ampBus, ampBus.index];
+			var n;
+			if (st[1].isNil) { n = Synth(st[0], ca, colourGroup, \addToTail) } {
+				n = Synth.newPaused(st[0], ca, colourGroup, \addToTail);
+				naps[n] = [false, 0, false];
+			};
+			n
+		};
 
 		this.addCommands;
 		this.addPolls;
 	}
 
 	trig { arg t, vel, pitch, decm, smix;
-		var syn, list;
+		var syn, list, a, lean;
 		if (t < 0 or: { t >= nTracks }) { ^nil };
 		list = live[t];
+		// the lean twin whenever neither the noise nor a sample is heard
+		a = args[t];
+		lean = ((a[\nlvl] ? 0) == 0) and: { (a[\ngrain] ? 0) == 0 }
+			and: { ((a[\slvl] ? 0) == 0) or: { bufs[t] === blank } };
 		if (chokes[t] == 1) {
 			list.do { |n| n.set(\gate, 0) };
 			list.clear;
 		} {
 			while { list.size >= 6 } { list.removeAt(0).set(\gate, 0) };
 		};
-		syn = Synth(defs[kits[t]][t], args[t].getPairs ++ [
+		syn = Synth((if (lean) { leanDefs } { defs })[kits[t]][t], a.getPairs ++ [
 			\out, tBus[t].index, \vel, vel, \pitch, pitch, \decm, decm, \smix, smix,
 			\buf, bufs[t].bufnum, \an, analog, \drift, driftBus.index + t
 		], voiceGroup);
@@ -1768,11 +1915,19 @@ Engine_DrumDrum : CroneEngine {
 		// strip(track, name, value): level pan tilt mute drive warmth dsend rsend
 		this.addCommand(\strip, "isf", { |msg|
 			var t = msg[1].asInteger;
-			if (t >= 0 and: { t < nTracks }) { strips[t].set(msg[2].asSymbol, msg[3]) };
+			var k = msg[2].asSymbol;
+			if (t >= 0 and: { t < nTracks }) {
+				strips[t].set(k, msg[3]);
+				if (k == \ssend) { ssends[t] = msg[3]; this.wantSpring };
+			};
 		});
 
+		// colour(name, value): the stages share no names, so the whole
+		// group hears it, and the stage it belongs to wakes or sleeps
 		this.addCommand(\colour, "sf", { |msg|
-			colourS.set(msg[1].asSymbol, msg[2]);
+			var k = msg[1].asSymbol;
+			colourGroup.set(k, msg[2]);
+			colourStages.do { |st, i| if (st[1] == k) { this.want(colourS[i], msg[2] != 0) } };
 		});
 
 		// duck(name, value): scsrc (0 off, 1-8 a track) scamt screl scfx
@@ -1785,6 +1940,7 @@ Engine_DrumDrum : CroneEngine {
 		this.addCommand(\fx, "sf", { |msg|
 			delayS.set(msg[1].asSymbol, msg[2]);
 			springS.set(msg[1].asSymbol, msg[2]);
+			if (msg[1].asSymbol == \sdecay) { sdecay = msg[2] };
 		});
 
 		// kit(track, kit): 0 WARM, 1 WOOD, 2 FM, 3 ADD, from the track's next hit.
@@ -1799,7 +1955,7 @@ Engine_DrumDrum : CroneEngine {
 		this.addCommand(\analog, "f", { |msg| analog = msg[1] });
 
 		// hiss(amount): every strip's VCA hiss, 0 to 1
-		this.addCommand(\hiss, "f", { |msg| strips.do { |st| st.set(\hiss, msg[1]) } });
+		this.addCommand(\hiss, "f", { |msg| hissS.set(\hiss, msg[1]); this.want(hissS, msg[1] > 0) });
 
 		// punch(stage, def, a, b, c, d): start a punch-in on a stage, letting
 		// go of whatever that stage was playing. def is the dd_pf_ name.
@@ -1863,6 +2019,36 @@ Engine_DrumDrum : CroneEngine {
 		this.addCommand(\panic, "", { |msg|
 			live.do { |l| l.do { |n| n.set(\gate, 0) }; l.clear };
 		});
+	}
+
+	// Some nodes sleep while they have nothing to do: a COLOUR stage at
+	// zero, the SPRING with nothing sent to it. Wanted, a node runs at
+	// once; not wanted, it rings on for TAIL seconds and is then paused,
+	// which costs nothing, unless it is wanted again first. Paused, it
+	// still hears every set, so it wakes up where its knobs are.
+	want { arg node, wanted, tail = 0.5;
+		var st = naps[node], gen;
+		if (st.isNil) { ^nil };
+		if (wanted) {
+			st[1] = st[1] + 1;
+			st[2] = false;
+			if (st[0].not) { node.run(true); st[0] = true };
+		} {
+			if (st[0] and: { st[2].not }) {
+				st[2] = true;
+				gen = st[1];
+				SystemClock.sched(tail, {
+					// (and not if the engine has gone meanwhile)
+					if (naps.notNil and: { st[1] == gen }) { node.run(false); st[0] = false; st[2] = false };
+					nil
+				});
+			};
+		};
+	}
+
+	// the spring, once nothing is sent to it, rings out its DECAY first
+	wantSpring {
+		this.want(springS, ssends.any { |v| v > 0 }, (sdecay * 1.5) + 0.5);
 	}
 
 	// A punch-in that is let go of fades (an echo rings on) and frees
@@ -1969,17 +2155,20 @@ Engine_DrumDrum : CroneEngine {
 	}
 
 	free {
+		naps = nil;
 		live.do { |l| l.do(_.free) };
 		strips.do(_.free);
+		hissS.free;
 		delayS.free; springS.free; duckS.free;
 		recS.free; perfGroup.free; tape.free; posBus.free;
-		colourS.free;
+		colourS.do(_.free);
 		sHitFunc.free; sSynth.free;
 		sGroup.free; sRing.free; sPosBus.free; sLvlBus.free;
 		voiceGroup.free; stripGroup.free; fxGroup.free; colourGroup.free;
 		tBus.do(_.free);
+		hissBus.free;
 		driftBus.free;
-		mixBus.free; dlyBus.free; sprBus.free; meterBus.free; ampBus.free;
+		mixBus.free; dryBus.free; dlyBus.free; sprBus.free; meterBus.free; ampBus.free;
 		scBus.free; duckBus.free;
 		bufs.do { |b| if (b !== blank) { b.free } };
 		blank.free;

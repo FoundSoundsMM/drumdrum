@@ -43,8 +43,10 @@ var n = 0, bad = 0, dir = thisProcess.argv[0], render = thisProcess.argv[1] == "
 try { Engine_DrumDrum.buildDefs } { |err| bad = 1; "\n!! BUILD ERROR: %\n".postf(err.errorString) };
 SynthDescLib.global.synthDescs.keysDo { |k|
 	if(k.asString.beginsWith("dd_")) { n = n + 1 } };
-"\n== synthdefs built: % (want 46)  errors: %\n".postf(n, bad);
-if(n != 46) { bad = bad + 1 };
+// every voice twice (full and lean), the strip, fx, sampler, punch-ins
+// and COLOUR's stages
+"\n== synthdefs built: % (want 91)  errors: %\n".postf(n, bad);
+if(n != 91) { bad = bad + 1 };
 
 if(render and: { bad == 0 }) {
 	// one line per voice: "defname arg value arg value ..."
@@ -58,7 +60,7 @@ if(render and: { bad == 0 }) {
 			[0.0, ['/d_recv', sDef.asBytes]],
 			[0.0, ['/d_recv', strip.asBytes]],
 			// voice on bus 16 into a strip at its defaults, out to 0
-			[0.0, ['/s_new', \dd_strip, 1001, 0, 0, \in, 16, \out, 0, \meter, 0, \sc, 40, \duck, 50, \hiss, 0]],
+			[0.0, ['/s_new', \dd_strip, 1001, 0, 0, \in, 16, \out, 0, \meter, 0, \sc, 40, \duck, 50, \hbus, 120]],
 			[0.01, ['/s_new', def, 1000, 0, 0] ++ pairs ++ [\out, 16, \vel, 1, \buf, -1]],
 			[4.0, ['/c_set', 0, 0]]
 		]).write(dir ++ "/" ++ def ++ ".osc");
@@ -83,10 +85,12 @@ if(thisProcess.argv[1] == "demo" and: { bad == 0 }) {
 	ev.add([0.0, ['/g_new', 100, 0, 0]]);
 	ev.add([0.001, ['/g_new', 101, 3, 100]]);
 	ev.add([0.0015, ['/g_new', 102, 3, 101]]);
-	(defsFor ++ [\dd_strip, \dd_duck, \dd_delay, \dd_spring, \dd_colour, \dd_rec,
+	(defsFor ++ Engine_DrumDrum.colourStages.collect(_[0]) ++ [\dd_hiss, \dd_strip, \dd_duck, \dd_delay, \dd_spring, \dd_rec,
 		\dd_pf_loop, \dd_pf_stop, \dd_pf_gate, \dd_pf_echo]).do { |d|
 		ev.add([0.0, ['/d_recv', SynthDescLib.global[d].def.asBytes]]) };
-	8.do { |t| ev.add([0.002, ['/s_new', \dd_strip, 2000 + t, 1, 101,
+	// the strips' VCA hiss on 110-117, ahead of them
+	ev.add([0.002, ['/s_new', \dd_hiss, 1999, 1, 101, \out, 110]]);
+	8.do { |t| ev.add([0.002, ['/s_new', \dd_strip, 2000 + t, 1, 101, \hbus, 110 + t,
 		\in, 16 + t, \out, if("DD_NOCOLOUR".getenv.notNil) { 0 } { 24 }, \meter, 1 + t, \pan, [0, 0, 0.2, 0, -0.35, 0.4, 0.25, -0.2][t],
 		\dbus, 26, \sbus, 28, \idx, t + 1, \sc, 40 + t, \duck, 50, \drift, 60 + t,
 		// DD_GHOST: the kick's fader down, so only its ducking is heard
@@ -100,12 +104,15 @@ if(thisProcess.argv[1] == "demo" and: { bad == 0 }) {
 		\out, if("DD_NOCOLOUR".getenv.notNil) { 0 } { 24 }, \dtime, 0.75 * 60 / 96]]);
 	ev.add([0.002, ['/s_new', \dd_spring, 2101, 1, 101, \in, 28, \duck, 50,
 		\out, if("DD_NOCOLOUR".getenv.notNil) { 0 } { 24 }]]);
-	if("DD_NOCOLOUR".getenv.isNil) { ev.add([0.002, ['/s_new', \dd_colour, 3000, 1, 102, \in, 24, \out, 0, \ampBus, 0,
+	// COLOUR's stages in order, every one running (the engine sleeps the
+	// ones at zero, which pass the signal through anyway); dry copy on 30
+	if("DD_NOCOLOUR".getenv.isNil) { Engine_DrumDrum.colourStages.do { |st, i|
+		ev.add([0.002, ['/s_new', st[0], 3000 + i, 1, 102, \bus, 24, \dry, 30, \out, 0, \ampBus, 0,
 		\drive, 0.3, \drivetype, 1, \crunch, 0.25, \trans, 0.3, \comp, 0.4,
 		\boom, 0.35, \boomfreq, 52, \boomdecay, 0.45, \bussdamp, 14000,
 		\noise, 0.12, \noisetype, 3, \wow, 0.12]
 		++ (("DD_COLOUR".getenv ? "").split($ ).reject(_.isEmpty).clump(2)
-			.collect { |p| [p[0].asSymbol, p[1].asFloat] }.flatten)]); };
+			.collect { |p| [p[0].asSymbol, p[1].asFloat] }.flatten)]) } };
 	4.do { |bar|
 		[1, 7, 11].do { |s| hit.(bar, s, 0, 1) };
 		if(bar == 3) { hit.(bar, 15, 0, 0.7) };
